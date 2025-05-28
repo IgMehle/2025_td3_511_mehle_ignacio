@@ -82,7 +82,7 @@ int main()
     adc_select_input(ADC_TEMPERATURE_CHANNEL_NUM);
 
     // Config IRQ ADC
-    // Seteo el FIFO del ADC (size 1)
+        // Seteo el FIFO del ADC (size 1)
     adc_fifo_setup(true, false, ADC_MUESTRAS, false, false);
     // Habilito irq del adc
     adc_irq_set_enabled(true);
