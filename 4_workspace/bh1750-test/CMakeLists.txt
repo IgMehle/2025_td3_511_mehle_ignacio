@@ -51,7 +51,7 @@ add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/bh1750 ${CMAKE_BINARY_DIR}/bh1750)
 target_link_libraries(bh1750-test
         pico_stdlib
         # Agrego librerias
-        hardware_spi
+        hardware_i2c
         bh1750)
 
 # Add the standard include files to the build

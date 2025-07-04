@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include "pico/stdlib.h"
-#include "hardware/spi.h"
+#include "hardware/i2c.h"
 #include "bh1750/bh1750.h"
 
 #define SDA_PIN 4
