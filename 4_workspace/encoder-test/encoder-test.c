@@ -11,6 +11,8 @@
 #define ENC_B_PIN   15
 #define ENC_PULS_PIN 13
 
+#define DEBOUNCE    20
+
 typedef struct {
     char dir;
     uint8_t get;
@@ -20,7 +22,7 @@ giro_t giro = {'D',0};
 
 void irq_encoder_a_down()
 {
-    sleep_ms(20);
+    sleep_ms(DEBOUNCE);
     // Si el pin B esta en 1, el giro es horario
     if(gpio_get(ENC_B_PIN)){
         giro.dir = 'D';
@@ -38,15 +40,15 @@ void irq_encoder_a_down()
 
 void irq_encoder_a_up()
 {
-    sleep_ms(20);
-    // Si el pin B esta en 0, el giro es horario
-    if(!gpio_get(ENC_B_PIN)){
-        giro.dir = 'D';
+    sleep_ms(DEBOUNCE);
+    // Si el pin B esta en 1, el giro es antihorario
+    if(gpio_get(ENC_B_PIN)){
+        giro.dir = 'I';
         giro.get = 1;
     }
-    // Si el pin B esta en 1, el giro es antihorario
+    // Si el pin B esta en 0, el giro es horario
     else {
-        giro.dir = 'I';
+        giro.dir = 'D';
         giro.get = 1;
     }
     gpio_put(LED_PIN, LED_ON);
@@ -56,9 +58,9 @@ void irq_encoder_a_up()
 
 void irq_encoder_b_down()
 {
-    sleep_ms(20);
-    // Si el pin A esta en 0, el giro es horario
-    if(!gpio_get(ENC_A_PIN)){
+    sleep_ms(DEBOUNCE);
+    // Si el pin A esta en 1, el giro es antihorario
+    if(gpio_get(ENC_A_PIN)){
         giro.dir = 'D';
         giro.get = 1;
     }
