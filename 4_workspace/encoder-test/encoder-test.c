@@ -1,124 +1,70 @@
+
 #include <stdio.h>
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
-#include "hardware/irq.h"
 
-#define LED_PIN 25
-#define LED_ON 	1
-#define LED_OFF	0
+// Pines del encoder
+#define ENCODER_A 14
+#define ENCODER_B 15
 
-#define ENC_A_PIN   14
-#define ENC_B_PIN   15
-#define ENC_PULS_PIN 13
+#define LED 25
+#define LED_ON 1
+#define LED_OFF 0
 
-#define DEBOUNCE    20
+// Variables para estado anterior
+volatile uint8_t last_state = 0;
 
-typedef struct {
-    char dir;
-    uint8_t get;
-} giro_t;
+// Rutina de interrupción común para ambos pines
+void encoder_isr(uint gpio, uint32_t events) {
+    // Antirrebote
+    sleep_ms(100);
+    // Leer ambos estados
+    bool a = gpio_get(ENCODER_A);
+    bool b = gpio_get(ENCODER_B);
+    uint8_t new_state = (a << 1) | b;
 
-giro_t giro = {'D',0};
-
-void irq_encoder_a_down()
-{
-    sleep_ms(DEBOUNCE);
-    // Si el pin B esta en 1, el giro es horario
-    if(gpio_get(ENC_B_PIN)){
-        giro.dir = 'D';
-        giro.get = 1;
+    // Combinaciones posibles
+    if ((last_state == 0b00 && new_state == 0b01) ||
+        (last_state == 0b01 && new_state == 0b11) ||
+        (last_state == 0b11 && new_state == 0b10) ||
+        (last_state == 0b10 && new_state == 0b00)) {
+        printf("H");  // Horario
+    } else if (
+        (last_state == 0b00 && new_state == 0b10) ||
+        (last_state == 0b10 && new_state == 0b11) ||
+        (last_state == 0b11 && new_state == 0b01) ||
+        (last_state == 0b01 && new_state == 0b00)) {
+        printf("A");  // Antihorario
     }
-    // Si el pin B esta en 0, el giro es antihorario
-    else {
-        giro.dir = 'I';
-        giro.get = 1;
-    }
-    gpio_put(LED_PIN, LED_ON);
-    sleep_ms(50);
-    gpio_put(LED_PIN, LED_OFF);
+
+    // gpio_put(LED, LED_ON);
+    // sleep_ms(50);
+    // gpio_put(LED, LED_OFF);
+    last_state = new_state;
 }
 
-void irq_encoder_a_up()
-{
-    sleep_ms(DEBOUNCE);
-    // Si el pin B esta en 1, el giro es antihorario
-    if(gpio_get(ENC_B_PIN)){
-        giro.dir = 'I';
-        giro.get = 1;
-    }
-    // Si el pin B esta en 0, el giro es horario
-    else {
-        giro.dir = 'D';
-        giro.get = 1;
-    }
-    gpio_put(LED_PIN, LED_ON);
-    sleep_ms(50);
-    gpio_put(LED_PIN, LED_OFF);
-}
+int main() {
+    stdio_usb_init();  // Inicializa consola USB
+    sleep_ms(1000);    // Espera a que el host USB esté listo
 
-void irq_encoder_b_down()
-{
-    sleep_ms(DEBOUNCE);
-    // Si el pin A esta en 1, el giro es antihorario
-    if(gpio_get(ENC_A_PIN)){
-        giro.dir = 'D';
-        giro.get = 1;
-    }
-    // Si el pin A esta en 1, el giro es antihorario
-    else {
-        giro.dir = 'I';
-        giro.get = 1;
-    }
-    gpio_put(LED_PIN, LED_ON);
-    sleep_ms(50);
-    gpio_put(LED_PIN, LED_OFF);
-}
+    gpio_init(LED);
+    gpio_set_dir(LED, GPIO_OUT);
+    gpio_put(LED, false);
 
-void irq_encoder_b_up()
-{
-    sleep_ms(20);
-    // Si el pin A esta en 1, el giro es horario
-    if(gpio_get(ENC_A_PIN)){
-        giro.dir = 'D';
-        giro.get = 1;
-    }
-    // Si el pin A esta en 0, el giro es antihorario
-    else {
-        giro.dir = 'I';
-        giro.get = 1;
-    }
-    gpio_put(LED_PIN, LED_ON);
-    sleep_ms(50);
-    gpio_put(LED_PIN, LED_OFF);
-}
+    gpio_init(ENCODER_A);
+    gpio_set_dir(ENCODER_A, GPIO_IN);
+    gpio_pull_up(ENCODER_A);
+    gpio_set_irq_enabled_with_callback(ENCODER_A, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true, &encoder_isr);
 
-int main()
-{
-    stdio_init_all();
+    gpio_init(ENCODER_B);
+    gpio_set_dir(ENCODER_B, GPIO_IN);
+    gpio_pull_up(ENCODER_B);
+    gpio_set_irq_enabled(ENCODER_B, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true);
 
-    gpio_init(LED_PIN);
-    gpio_set_dir(LED_PIN, true);
-    gpio_put(LED_PIN, LED_OFF);
-
-    // INIT GPIO INPUT PINS
-    gpio_init(ENC_A_PIN);
-    gpio_init(ENC_B_PIN);
-    // GPIO como entradas
-    gpio_set_dir(ENC_A_PIN, false);
-    gpio_set_dir(ENC_B_PIN, false);
-    // Set pullups
-    gpio_set_pulls(ENC_A_PIN, true, false);
-    gpio_set_pulls(ENC_B_PIN, true, false);
-    // Habilito las IRQ
-    gpio_set_irq_enabled_with_callback(ENC_A_PIN, GPIO_IRQ_EDGE_FALL, true, &irq_encoder_a_down);
-    gpio_set_irq_enabled_with_callback(ENC_A_PIN, GPIO_IRQ_EDGE_RISE, true, &irq_encoder_a_up);
-    gpio_set_irq_enabled_with_callback(ENC_B_PIN, GPIO_IRQ_EDGE_FALL, true, &irq_encoder_b_down);
-    gpio_set_irq_enabled_with_callback(ENC_B_PIN, GPIO_IRQ_EDGE_RISE, true, &irq_encoder_b_up);
+    // Estado inicial
+    last_state = (gpio_get(ENCODER_A) << 1) | gpio_get(ENCODER_B);
 
     while (true) {
-        if(giro.get){
-            giro.get = 0;
-            printf("%c ", giro.dir);
-        }
+        tight_loop_contents();  // Espera activa
     }
 }
