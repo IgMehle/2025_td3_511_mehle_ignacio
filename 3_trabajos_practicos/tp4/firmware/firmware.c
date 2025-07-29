@@ -18,8 +18,8 @@
 //----- PINOUT ----- //
 #define BUTTON_PIN  17
 #define LED_PWM_PIN 16
-#define I2C_SDA_PIN 18
-#define I2C_SCL_PIN 19
+#define I2C_SDA_PIN 4
+#define I2C_SCL_PIN 5
 #define LED_RUN     25
 
 // Parametros de compensacion del BMP280
@@ -30,6 +30,12 @@ typedef struct {
     float temperatura;
     int32_t presion;
 } q_lcd_t;
+
+// Struct de la funcion de calculo de pwm y error
+typedef struct {
+    uint16_t brillo;
+    float error;
+} pwm_t;
 
 // Handle mutex I2C
 SemaphoreHandle_t sm_i2c;
@@ -54,9 +60,10 @@ void puls_irq(uint gpio, uint32_t event_mask)
     xQueueSendFromISR(q_screen, &lcd_screen, &wake_hp_task);
 }
 
-uint16_t led_pwm(float temperatura, float setpoint){
+pwm_t led_pwm(float temperatura, float setpoint){
     static int fade;
     float error;
+    pwm_t result;
     // Calculo el error absoluto
     error = temperatura - setpoint;
     // Tomo valor absoluto
@@ -70,7 +77,9 @@ uint16_t led_pwm(float temperatura, float setpoint){
     // Se calcula el PWM de manera cuadratica
     // Para obtener una variacion de brillo mas lineal
     // Fuente: github.com/raspberrypi/pico-examples/pwm/led_fade
-    return (uint16_t)(fade*fade);
+    result.brillo = (uint16_t)(fade*fade);
+    result.error = error;
+    return result;
 }
 
 static void task_BMP280(void *pvParams)
@@ -102,28 +111,40 @@ static void task_LCD(void *pvParams)
 {
     q_lcd_t bf;
     char line0[16], line1[16];
-    uint16_t brillo = 0;
+    pwm_t pwm;
+    uint8_t screen;
     float setpoint = 25.0;
 
     while(1){
         if(xQueueReceive(q_lcd, &bf, portMAX_DELAY) == pdPASS){
-            // Formateo los datos para mostrar en LCD
-            sprintf(line0, "Temp: %.1f °C", bf.temperatura);
-            sprintf(line1, "Presion: %d hPa", bf.presion);
+            // Calculo PWM del led de error
+            pwm = led_pwm(bf.temperatura, setpoint);
+            // Reviso que pantalla muestro
+            xQueuePeek(q_screen, &screen, 0);
+            if(screen){
+                // Formateo los datos para mostrar en LCD
+                sprintf(line0, "Setpoint: %.1fC", setpoint);
+                sprintf(line1, "Error: %.2f", pwm.error);
+            }
+            else {
+                // Formateo los datos para mostrar en LCD
+                sprintf(line0, "Temp: %.1fC", bf.temperatura);
+                sprintf(line1, "Presion: %4dhPa", bf.presion);
+            }
             // Intento tomar el mutex del bus I2C
             if(xSemaphoreTake(sm_i2c, portMAX_DELAY) == pdPASS){
                 // Imprimo ambas lineas del LCD
-                //lcd_set_cursor(0, 0);
-                //lcd_string(line0);
-                //lcd_set_cursor(1, 0);
-                //lcd_string(line1);
-                printf("%s %s",line0, line1);
+                lcd_clear();
+                lcd_set_cursor(0, 0);
+                lcd_string(line0);
+                lcd_set_cursor(1, 0);
+                lcd_string(line1);
+                printf("%s %s\n",line0, line1);
                 // Devuelvo el mutex
                 xSemaphoreGive(sm_i2c);
             }
             // Actualizo PWM led de error
-            brillo = led_pwm(bf.temperatura, setpoint);
-            pwm_set_gpio_level(LED_PWM_PIN, brillo);
+            pwm_set_gpio_level(LED_PWM_PIN, pwm.brillo);
         }
     }
 }
@@ -172,7 +193,7 @@ int main()
 
     //----- config I2C -----//
     // I2C1 a 100khz
-    i2c_init(i2c1, 100000);
+    i2c_init(i2c0, 100000);
     // I2C1_SDA en GPIO18
     gpio_set_function(I2C_SDA_PIN, GPIO_FUNC_I2C);
     // I2C1_SCL en GPIO19
@@ -183,13 +204,13 @@ int main()
 
     // ----- config BMP280 -----//
     // Inicializa el BMP280 usando el I2C1
-    bmp280_init(i2c1);
+    bmp280_init(i2c0);
     // Obtiene parámetros de compensación
     struct bmp280_calib_param params_bmp;
     bmp280_get_calib_params(&params_bmp);
 
     // Inicializo LCD
-    lcd_init(i2c1, 0x27);
+    lcd_init(i2c0, 0x27);
     lcd_clear();
 
     // Creo mutex para el bus I2C y lo libero
@@ -197,13 +218,14 @@ int main()
     xSemaphoreGive(sm_i2c);
     // Creo queue para el LCD
     q_lcd = xQueueCreate(1, sizeof(q_lcd_t));
-    // Creo semaforo binario para el pulsador
+    // Creo semaforo binario para el pulsador y lo libero
     s_puls = xSemaphoreCreateBinary();
+    xSemaphoreGive(s_puls);
     // Creo cola para cambio de pantalla con el pulsador
     q_screen = xQueueCreate(1, sizeof(uint8_t));
 
     // Creo tarea BMP280
-    xTaskCreate(task_BMP280, "BMP280", 2*configMINIMAL_STACK_SIZE, NULL, 1, NULL);
+    xTaskCreate(task_BMP280, "BMP280", 2*configMINIMAL_STACK_SIZE, NULL, 3, NULL);
     // Creo tarea LCD
     xTaskCreate(task_LCD, "LCD", 2*configMINIMAL_STACK_SIZE, NULL, 2, NULL);
     // Creo tarea RUN
