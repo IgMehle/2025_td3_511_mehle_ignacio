@@ -5,9 +5,9 @@ uint8_t eeprom_write(uint8_t *data, uint16_t address, uint8_t bytes)
     uint8_t len = bytes + 2;
     // Frame = Address + Data
     uint8_t frame[len];
-    static uint8_t stat;
+    static uint8_t status;
     static int resp;
-    stat = 0;
+    status = 1;
     
     // Chequeo que no voy a querer escribir mas que 32 bytes (eeprom page)
     if (bytes <= 32){
@@ -21,30 +21,30 @@ uint8_t eeprom_write(uint8_t *data, uint16_t address, uint8_t bytes)
         // frame[4] = data[2];
         // frame[5] = data[3];
         // Envio bytes a escribir
-        resp = i2c_write_blocking(i2c0, AT24C32_ADDR, frame, len, false);
+        resp = i2c_write_blocking(i2c1, AT24C32_ADDR, frame, len, false);
         // Tiempo de escritura en eeprom PROBAR
         sleep_ms(10);
-        if (resp != len) stat = 1;
+        if (resp != len) status = 0;
     }
-    else stat = 1;
-    return stat;
+    else status = 0;
+    return status;
 }
 
 uint8_t eeprom_read(uint8_t *data, uint16_t address, uint8_t bytes)
 {
     static uint8_t addr[2];
-    static uint8_t stat;
+    static uint8_t status;
     static int resp;
-    stat = 0;
+    status = 1;
 
     // Desempaqueto la direccion de memoria a la que escribir
     addr[0] = (uint8_t)(address >> 8);
     addr[0] = (uint8_t)(address & 0x00FF);
     // Envio direccion de memoria de la eeprom
-    resp = i2c_write_blocking(i2c0, AT24C32_ADDR, addr, 2, true);
-    if (resp != 2) stat = 1;
+    resp = i2c_write_blocking(i2c1, AT24C32_ADDR, addr, 2, true);
+    if (resp != 2) status = 0;
     // Leo bytes de la eeprom
-    resp = i2c_read_blocking(i2c0, AT24C32_ADDR, data, bytes, false);
-    if (resp != bytes) stat = 1;
-    return stat;
+    resp = i2c_read_blocking(i2c1, AT24C32_ADDR, data, bytes, false);
+    if (resp != bytes) status = 0;
+    return status;
 }

@@ -1,5 +1,4 @@
 #include "hardware/i2c.h"
-#include <stdbool.h>
 
 #define AT24C32_ADDR 0x50
 
@@ -14,14 +13,9 @@
  */
 uint8_t eeprom_write(uint8_t *data, uint16_t address, uint8_t bytes);
 
-
-/*! \brief Lee bytes de la eeprom
- *  \ingroup at24c32
- *  
- * \param data Puntero al array de bytes donde escribo los bytes leidos
- * \param address Direccion de 16bit de la memoria interna donde vamos a leer
- * \param bytes Cantidad de bytes a leer
- * 
- * \return TRUE si se leen los bytes OK, FALSE si hay algun error
- */
+/// @brief Lee bytes de la eeprom
+/// @param data Puntero al array de bytes donde escribo los bytes leidos
+/// @param address Direccion de 16bit de la memoria interna donde vamos a leer
+/// @param bytes Cantidad de bytes a leer
+/// @return TRUE si se leen los bytes OK, FALSE si hay algun error
 uint8_t eeprom_read(uint8_t *data, uint16_t address, uint8_t bytes);

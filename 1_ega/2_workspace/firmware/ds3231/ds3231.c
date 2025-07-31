@@ -1,9 +1,9 @@
 #include "ds3231.h"
 
-bool rtc_load(rtc_t data){
+uint8_t rtc_load(rtc_t data){
     int resp;
     uint8_t bf[8];
-    bool status = true;
+    uint8_t status = 1;
 
     bf[0] = 0x00; // RTC WRITE ADDRESS
     bf[1] = 0x7F & BIN2BCD(data.second);
@@ -14,22 +14,22 @@ bool rtc_load(rtc_t data){
     bf[6] = BIN2BCD(data.month);
     bf[7] = BIN2BCD(data.year);
 
-    resp = i2c_write_blocking(i2c0, DS3231_ADDR, bf, 8, false);
-    if(resp != 8) status = false;
+    resp = i2c_write_blocking(i2c1, DS3231_ADDR, bf, 8, false);
+    if(resp != 8) status = 0;
     return status;
 }
 
-bool rtc_read(rtc_t *data){
+uint8_t rtc_read(rtc_t *data){
     static int resp;
-    static bool status;
+    static uint8_t status;
     static uint8_t read_addr = 0x00;
     static uint8_t x[7];
 
-    status = true;
-    resp = i2c_write_blocking(i2c0, DS3231_ADDR, &read_addr, 1, true);
-    if(resp == PICO_ERROR_GENERIC) status = false;
-    resp = i2c_read_blocking(i2c0, DS3231_ADDR, x, 7, false);
-    if(resp == PICO_ERROR_GENERIC) status = false;
+    status = 1;
+    resp = i2c_write_blocking(i2c1, DS3231_ADDR, &read_addr, 1, true);
+    if(resp == PICO_ERROR_GENERIC) status = 0;
+    resp = i2c_read_blocking(i2c1, DS3231_ADDR, x, 7, false);
+    if(resp == PICO_ERROR_GENERIC) status = 0;
 
     data->second = ((x[0] & 0x70) >> 4)*10 + (x[0] & 0x0F);
     data->minute = (x[1] >> 4)*10 + (x[1] & 0x0F);

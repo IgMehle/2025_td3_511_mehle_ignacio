@@ -1,5 +1,4 @@
 #include <stdio.h>
-#include <stdbool.h>
 #include "hardware/i2c.h"
 
 #define DS3231_ADDR 0x68
@@ -17,5 +16,5 @@ typedef struct {
     uint8_t year;
 } rtc_t;
 
-bool rtc_load(rtc_t);
-bool rtc_read(rtc_t *);
+uint8_t rtc_load(rtc_t);
+uint8_t rtc_read(rtc_t *data);

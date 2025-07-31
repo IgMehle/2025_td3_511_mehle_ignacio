@@ -2,5 +2,5 @@
 
 #define BH1750_ADDR 0x23
 
-bool bh1750_init(void);
-uint16_t bh1750_read();
+uint8_t bh1750_init(void);
+uint16_t bh1750_read(void);

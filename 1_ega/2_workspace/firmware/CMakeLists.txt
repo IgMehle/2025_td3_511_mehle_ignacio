@@ -44,9 +44,28 @@ pico_set_program_version(firmware "0.1")
 pico_enable_stdio_uart(firmware 0)
 pico_enable_stdio_usb(firmware 1)
 
+# Add external FreeRTOS library
+add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../freertos ${CMAKE_BINARY_DIR}/freertos)
+# Agrego subdirectorios de librerias
+add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/bh1750 ${CMAKE_BINARY_DIR}/bh1750)
+add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/ds3231 ${CMAKE_BINARY_DIR}/ds3231)
+add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/at24c32 ${CMAKE_BINARY_DIR}/at24c32)
+add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/lcd ${CMAKE_BINARY_DIR}/lcd)
+
 # Add the standard library to the build
 target_link_libraries(firmware
-        pico_stdlib)
+        pico_stdlib
+        hardware_i2c
+        hardware_pwm
+        hardware_clocks
+        hardware_irq
+        hardware_gpio
+        freertos
+        bh1750
+        ds3231
+        at24c32
+        lcd
+        )
 
 # Add the standard include files to the build
 target_include_directories(firmware PRIVATE
