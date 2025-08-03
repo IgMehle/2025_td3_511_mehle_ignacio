@@ -7,8 +7,8 @@
 
 //----- RTC_T for RTC -----//
 typedef struct {
-    uint8_t second;
-    uint8_t minute;
+    uint8_t sec;
+    uint8_t min;
     uint8_t hour;
     uint8_t weekday;
     uint8_t day;

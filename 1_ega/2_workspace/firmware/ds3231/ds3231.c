@@ -6,8 +6,8 @@ uint8_t rtc_load(rtc_t data){
     uint8_t status = 1;
 
     bf[0] = 0x00; // RTC WRITE ADDRESS
-    bf[1] = 0x7F & BIN2BCD(data.second);
-    bf[2] = BIN2BCD(data.minute);
+    bf[1] = 0x7F & BIN2BCD(data.sec);
+    bf[2] = BIN2BCD(data.min);
     bf[3] = BIN2BCD(data.hour) & 0x3F;;
     bf[4] = data.weekday;
     bf[5] = BIN2BCD(data.day);
@@ -31,8 +31,8 @@ uint8_t rtc_read(rtc_t *data){
     resp = i2c_read_blocking(i2c1, DS3231_ADDR, x, 7, false);
     if(resp == PICO_ERROR_GENERIC) status = 0;
 
-    data->second = ((x[0] & 0x70) >> 4)*10 + (x[0] & 0x0F);
-    data->minute = (x[1] >> 4)*10 + (x[1] & 0x0F);
+    data->sec = ((x[0] & 0x70) >> 4)*10 + (x[0] & 0x0F);
+    data->min = (x[1] >> 4)*10 + (x[1] & 0x0F);
     data->hour = ((x[2] & 0x20) >> 4)*10 + (x[2] & 0x0F);
     data->weekday = x[3];
     data->day = (x[4] >> 4)*10 + (x[4] & 0x0F);

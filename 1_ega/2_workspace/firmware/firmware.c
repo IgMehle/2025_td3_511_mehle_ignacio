@@ -123,10 +123,9 @@ void task_encoder(void *pvParams)
                 // Envio comando a la cola
                 comando = 'P';
                 xQueueOverwrite(qCTRL, &comando);
-                gpio_set_irq_enabled(PULS_PIN, GPIO_IRQ_EDGE_RISE, true);
+                //gpio_set_irq_enabled(PULS_PIN, GPIO_IRQ_EDGE_RISE, true);
             }
         }
-
         // SEMAFORO ENCODER A
         if(xSemaphoreTake(sA, portMAX_DELAY) == pdPASS){
             // tiempo de antirrebote
@@ -136,7 +135,7 @@ void task_encoder(void *pvParams)
                 // Envio comando a la cola
                 comando = 'A';
                 xQueueOverwrite(qCTRL, &comando);
-                gpio_set_irq_enabled(PULS_PIN, GPIO_IRQ_EDGE_RISE, true);
+                //gpio_set_irq_enabled(PULS_PIN, GPIO_IRQ_EDGE_RISE, true);
             }
         }
         // SEMAFORO ENCODER B
@@ -148,11 +147,13 @@ void task_encoder(void *pvParams)
                 // Envio comando a la cola
                 comando = 'H';
                 xQueueOverwrite(qCTRL, &comando);
-                gpio_set_irq_enabled(PULS_PIN, GPIO_IRQ_EDGE_RISE, true);
+                //gpio_set_irq_enabled(PULS_PIN, GPIO_IRQ_EDGE_RISE, true);
             }
         }
         // VUELVO A HABILITAR IRQS
-        irq_set_enabled(GPIO_IRQ_EDGE_RISE, true);
+        //irq_set_enabled(GPIO_IRQ_EDGE_RISE, true);
+        // Fuerzo cambio de contexto
+        // taskYIELD();
     }
 }
 
@@ -189,8 +190,8 @@ void task_EEPROM(void *pvParams)
         // Intento leer de la queue de escritura
         if(xQueueReceive(qEwrite, &time, portMAX_DELAY) == pdPASS){
             // Desempaqueto
-            bf[0] = time.second;
-            bf[1] = time.minute;
+            bf[0] = time.sec;
+            bf[1] = time.min;
             bf[2] = time.hour;
             bf[3] = time.weekday;
             bf[4] = time.day;
@@ -212,8 +213,8 @@ void task_EEPROM(void *pvParams)
                 xSemaphoreGive(mI2C);
             }
             // Empaqueto
-            time.second = bf[0];
-            time.minute = bf[1];
+            time.sec = bf[0];
+            time.min = bf[1];
             time.hour = bf[2];
             time.weekday = bf[3];
             time.day = bf[4];
@@ -279,15 +280,6 @@ void task_Setear(void *params)
             // indice del menu == 0
             indice = 0;
             show_menu = 1;
-
-            // Muestro titulo del menu en lcd
-            sprintf(lcd.text, "%s", menu[indice].texto);
-            lcd.line = 0;
-            ///// -> LCD
-            // Muestro valor actualizado en LCD
-            sprintf(lcd.text, "%4d", menu[indice].valor);
-            lcd.line = 1;
-            ///// -> LCD
             
             // Entro en el loop de ejecucion del menu
             while (indice < MENU_SIZE)
@@ -297,10 +289,16 @@ void task_Setear(void *params)
                     sprintf(lcd.text, "%s", menu[indice].texto);
                     lcd.line = 0;
                     ///// -> LCD
+                    xQueueOverwrite(qLCD, &lcd);
+                    taskYIELD();
                     // Muestro valor actualizado en LCD
                     sprintf(lcd.text, "%4d", menu[indice].valor);
                     lcd.line = 1;
                     ///// -> LCD
+                    // xQueueSend(qLCD, &lcd, 0);
+                    xQueueOverwrite(qLCD, &lcd);
+                    taskYIELD();
+                    // limpio variable
                     show_menu = 0;
                 }
                 // Recepcion no bloqueante (NO HACER PEEK)
@@ -318,6 +316,8 @@ void task_Setear(void *params)
                         sprintf(lcd.text, "%4d", menu[indice].valor);
                         lcd.line = 1;
                         ///// -> LCD
+                        xQueueOverwrite(qLCD, &lcd);
+                        taskYIELD();
                     }
                     break;
                 case 'D':
@@ -328,6 +328,8 @@ void task_Setear(void *params)
                         sprintf(lcd.text, "%4d", menu[indice].valor);
                         lcd.line = 1;
                         ///// -> LCD
+                        xQueueOverwrite(qLCD, &lcd);
+                        taskYIELD();
                     }
                     break;
                 case 'P':
@@ -343,6 +345,14 @@ void task_Setear(void *params)
             // Si calibracion == 1
             // calibracion();
             // GUARDANDO CONFIG ... -> LCD
+            sprintf(lcd.text, "GUARDANDO");
+            lcd.line = 0;
+            xQueueOverwrite(qLCD, &lcd);
+            taskYIELD();
+            sprintf(lcd.text, "CONFIGURACION");
+            lcd.line = 1;
+            xQueueOverwrite(qLCD, &lcd);
+            taskYIELD();
             // DELAY 1SEG
             // MENU -> settings
             // settings -> EEPROM
@@ -378,8 +388,8 @@ void task_Control(void *pvParams)
             // leo queue de eeprom
             xQueueReceive(qEread, &time, portMAX_DELAY);
             // Desempaqueto
-            bf[0] = time.second;
-            bf[1] = time.minute;
+            bf[0] = time.sec;
+            bf[1] = time.min;
             bf[2] = time.hour;
             bf[3] = time.weekday;
             bf[4] = time.day;
@@ -387,7 +397,7 @@ void task_Control(void *pvParams)
             bf[6] = time.year;
             // muestro la ultima hora
             sprintf(lcd.text, "%02d/%02d %02d:%02d:%02d", time.day, time.month, 
-                                time.hour, time.minute, time.second);
+                                time.hour, time.min, time.sec);
             lcd.line = 1;
             // Escribo hora en el LCD
             xQueueSend(qLCD, &lcd, portMAX_DELAY);
@@ -439,8 +449,8 @@ int main()
 
     // Inicializo DS3231
     rtc_t init;
-    init.second = 30;
-    init.minute = 10;
+    init.sec = 30;
+    init.min = 10;
     init.hour = 20;
     init.weekday = 3;
     init.day = 2;
@@ -516,14 +526,14 @@ int main()
     qEwrite = xQueueCreate(1, sizeof(rtc_t));
 
     // Creo tareas
-    xTaskCreate(task_Control, "CONTROL", 2*configMINIMAL_STACK_SIZE, NULL, 1, NULL);
-    xTaskCreate(task_BH1750, "BH1750", configMINIMAL_STACK_SIZE, NULL, 2, &tBH1750);
-    xTaskCreate(task_PWM, "PWM", configMINIMAL_STACK_SIZE, NULL, 2, &tPWM);
+    // xTaskCreate(task_Control, "CONTROL", 2*configMINIMAL_STACK_SIZE, NULL, 1, NULL);
+    // xTaskCreate(task_BH1750, "BH1750", configMINIMAL_STACK_SIZE, NULL, 2, &tBH1750);
+    // xTaskCreate(task_PWM, "PWM", configMINIMAL_STACK_SIZE, NULL, 2, &tPWM);
     xTaskCreate(task_LCD, "LCD", configMINIMAL_STACK_SIZE, NULL, 3, &tLCD);
-    xTaskCreate(task_EEPROM, "EEPROM", configMINIMAL_STACK_SIZE, NULL, 3, &tEEPROM);
-    xTaskCreate(task_Setear, "SETEAR", configMINIMAL_STACK_SIZE, NULL, 4, &tPulsador);
-    xTaskCreate(task_LedRun, "LEDRUN", configMINIMAL_STACK_SIZE, NULL, 4, &tRUN);
-    xTaskCreate(task_encoder, "Encoder", configMINIMAL_STACK_SIZE, NULL, 5, &tEncoder);
+    // xTaskCreate(task_EEPROM, "EEPROM", configMINIMAL_STACK_SIZE, NULL, 3, &tEEPROM);
+    xTaskCreate(task_Setear, "SETEAR", configMINIMAL_STACK_SIZE, NULL, 2, &tPulsador);
+    xTaskCreate(task_LedRun, "LEDRUN", configMINIMAL_STACK_SIZE, NULL, 2, &tRUN);
+    xTaskCreate(task_encoder, "Encoder", configMINIMAL_STACK_SIZE, NULL, 4, &tEncoder);
 
     // Enciendo el scheduler
     vTaskStartScheduler();
