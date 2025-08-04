@@ -47,10 +47,11 @@ SemaphoreHandle_t mI2C;
 // Semaforos de control
 SemaphoreHandle_t sPULS, sA, sB, sEwrite, sEread;
 
-// Item de queue LCD
+// ITEM DE QUEUE LCD
 typedef struct {
     char text[17];
     uint8_t line;
+    uint8_t clear;
 } qLCD_t;
 
 // ESTRUCTURA BASE DE SETTINGS
@@ -63,6 +64,7 @@ typedef struct {
     rtc_t time; // 7B
 } settings_t;
 
+// ESTRUCTURA DE MENU
 typedef struct {
     const char* texto;
     int valor;
@@ -81,74 +83,98 @@ char text7[] = {"CALIBRACION?"};
 char text10[] = {"GUARDANDO..."};
 char text11[] = {"LUX: "};
 
-void irq_pulsador(uint gpio, uint32_t events)
+void irq_encoder(uint gpio, uint32_t events)
 {
     static BaseType_t taskWoken = pdTRUE;
+    switch(gpio){
+        case PULS_PIN:
+            xSemaphoreGiveFromISR(sPULS, &taskWoken);
+            break;
+        case ENC_A_PIN:
+            xSemaphoreGiveFromISR(sA, &taskWoken);
+            break;
+        case ENC_B_PIN:
+            xSemaphoreGiveFromISR(sB, &taskWoken);
+            break;
+        default:
+            break;
+    }
+    // if (gpio == PULS_PIN) {
+    //     xSemaphoreGiveFromISR(sPULS, &taskWoken);
+    // } else if (gpio == ENC_A_PIN) {
+    //     xSemaphoreGiveFromISR(sA, &taskWoken);
+    // } else if (gpio == ENC_B_PIN) {
+    //     xSemaphoreGiveFromISR(sB, &taskWoken);
+    // }
     // Deshabilito irq para que no se redispare
     //gpio_set_irq_enabled(PULS_PIN, GPIO_IRQ_EDGE_FALL, false);
-    xSemaphoreGiveFromISR(sPULS, &taskWoken);
 }
 
-void irq_encoderA(uint gpio, uint32_t events)
+void task_Pulsador(void *pvParams)
 {
-    static BaseType_t taskWoken = pdTRUE;
-    // Deshabilito irq para que no se redispare
-    //gpio_set_irq_enabled(ENC_A_PIN, GPIO_IRQ_EDGE_FALL, false);
-    xSemaphoreGiveFromISR(sA, &taskWoken);
-}
-
-void irq_encoderB(uint gpio, uint32_t events)
-{
-    static BaseType_t taskWoken = pdTRUE;
-    // Deshabilito irq para que no se redispare
-    //gpio_set_irq_enabled(ENC_B_PIN, GPIO_IRQ_EDGE_FALL, false);
-    xSemaphoreGiveFromISR(sB, &taskWoken);
-}
-
-void task_encoder(void *pvParams)
-{
-    char comando;
+    char comando = 'P';
     while(1){
         // SEMAFORO PULSADOR
         if(xSemaphoreTake(sPULS, portMAX_DELAY) == pdPASS){
+            // Envio comando a la cola
+            xQueueOverwrite(qCTRL, &comando);
             // tiempo de antirrebote
-            vTaskDelay(pdMS_TO_TICKS(DEBOUNCE_TIME));
+            //vTaskDelay(pdMS_TO_TICKS(DEBOUNCE_TIME));
             // Verifico pulsador
-            if(gpio_get(PULS_PIN)){
+            //if(gpio_get(PULS_PIN)){
                 // Envio comando a la cola
-                comando = 'P';
-                xQueueOverwrite(qCTRL, &comando);
+                //comando = 'P';
+                //xQueueSend(qCTRL, &comando, portMAX_DELAY);
+                //xQueueOverwrite(qCTRL, &comando);
                 //gpio_set_irq_enabled(PULS_PIN, GPIO_IRQ_EDGE_RISE, true);
-            }
-        }
-        // SEMAFORO ENCODER A
-        if(xSemaphoreTake(sA, portMAX_DELAY) == pdPASS){
-            // tiempo de antirrebote
-            vTaskDelay(pdMS_TO_TICKS(DEBOUNCE_TIME));
-            // Verifico pulsador
-            if(gpio_get(ENC_A_PIN)){
-                // Envio comando a la cola
-                comando = 'A';
-                xQueueOverwrite(qCTRL, &comando);
-                //gpio_set_irq_enabled(PULS_PIN, GPIO_IRQ_EDGE_RISE, true);
-            }
-        }
-        // SEMAFORO ENCODER B
-        if(xSemaphoreTake(sB, portMAX_DELAY) == pdPASS){
-            // tiempo de antirrebote
-            vTaskDelay(pdMS_TO_TICKS(DEBOUNCE_TIME));
-            // Verifico pulsador
-            if(gpio_get(ENC_B_PIN)){
-                // Envio comando a la cola
-                comando = 'H';
-                xQueueOverwrite(qCTRL, &comando);
-                //gpio_set_irq_enabled(PULS_PIN, GPIO_IRQ_EDGE_RISE, true);
-            }
+            //}
         }
         // VUELVO A HABILITAR IRQS
         //irq_set_enabled(GPIO_IRQ_EDGE_RISE, true);
         // Fuerzo cambio de contexto
         // taskYIELD();
+    }
+}
+
+void task_EncoderA(void *pvParams)
+{
+    char comando = 'A';
+    while(1){
+        // SEMAFORO ENCODER A
+        if(xSemaphoreTake(sA, portMAX_DELAY) == pdPASS){
+            xQueueOverwrite(qCTRL, &comando);
+            // tiempo de antirrebote
+            //vTaskDelay(pdMS_TO_TICKS(DEBOUNCE_TIME));
+            // Verifico pulsador
+            //if(gpio_get(ENC_A_PIN)){
+                // Envio comando a la cola
+                //comando = 'A';
+                //xQueueSend(qCTRL, &comando, portMAX_DELAY);
+                //xQueueOverwrite(qCTRL, &comando);
+                //gpio_set_irq_enabled(PULS_PIN, GPIO_IRQ_EDGE_RISE, true);
+            //}
+        }
+    }
+}
+
+void task_EncoderB(void *pvParams)
+{
+    char comando = 'H';
+    while(1){
+        // SEMAFORO ENCODER B
+        if(xSemaphoreTake(sB, portMAX_DELAY) == pdPASS){
+            xQueueOverwrite(qCTRL, &comando);
+            // tiempo de antirrebote
+            //vTaskDelay(pdMS_TO_TICKS(DEBOUNCE_TIME));
+            // Verifico pulsador
+            //if(gpio_get(ENC_B_PIN)){
+                // Envio comando a la cola
+                //comando = 'H';
+                //xQueueSend(qCTRL, &comando, portMAX_DELAY);
+                //xQueueOverwrite(qCTRL, &comando);
+                //gpio_set_irq_enabled(PULS_PIN, GPIO_IRQ_EDGE_RISE, true);
+            //}
+        }
     }
 }
 
@@ -229,10 +255,16 @@ void task_LCD(void *pvParams)
         if(xQueueReceive(qLCD, &bf, portMAX_DELAY) == pdPASS){
             // Si puedo tomar el bus
             if(xSemaphoreTake(mI2C, portMAX_DELAY) == pdPASS){
+                if(bf.clear){
+                    lcd_clear();
+                    vTaskDelay(pdMS_TO_TICKS(10));
+                }
                 lcd_set_cursor(bf.line, 0);
                 lcd_string(bf.text);
                 xSemaphoreGive(mI2C);
             }
+            // Delay de procesamiento
+            vTaskDelay(pdMS_TO_TICKS(10));
         }        
     }
 }
@@ -286,25 +318,30 @@ void task_Setear(void *params)
                     // Muestro titulo del menu en lcd
                     sprintf(lcd.text, "%s", menu[indice].texto);
                     lcd.line = 0;
+                    lcd.clear = 1;
                     ///// -> LCD
-                    // xQueueSend(qLCD, &lcd, 0);
-                    xQueueOverwrite(qLCD, &lcd);
+                    // xQueue(qLCD, &lcd, 0);
+                    xQueueSend(qLCD, &lcd, portMAX_DELAY);
                     taskYIELD();
                     // Muestro valor actualizado en LCD
                     sprintf(lcd.text, "%4d", menu[indice].valor);
                     lcd.line = 1;
+                    lcd.clear = 0;
                     ///// -> LCD
                     // xQueueSend(qLCD, &lcd, 0);
-                    xQueueOverwrite(qLCD, &lcd);
+                    //xQueueOverwrite(qLCD, &lcd);
+                    xQueueSend(qLCD, &lcd, portMAX_DELAY);
                     taskYIELD();
                     // limpio variable
                     show_menu = 0;
                 }
+                printf("Indice: %d, Opc: %c, Show: %d", indice, opc, show_menu);
                 // Recepcion no bloqueante (NO HACER PEEK)
-                rx = xQueueReceive(qCTRL, &opc, 0);
+                rx = xQueueReceive(qCTRL, &opc, portMAX_DELAY);
                 // Si no llega un comando no lo proceso,
                 // Continuo con la proxima iteracion
-                if(rx != pdPASS) continue;
+                //if(rx != pdPASS) continue;
+                if(rx == pdPASS) printf("Comando recibido: %c\n", opc);
                 // Comando
                 switch (opc){
                 case 'H':
@@ -314,8 +351,10 @@ void task_Setear(void *params)
                         // Muestro valor actualizado en LCD
                         sprintf(lcd.text, "%4d", menu[indice].valor);
                         lcd.line = 1;
+                        lcd.clear = 0;
                         ///// -> LCD
-                        xQueueOverwrite(qLCD, &lcd);
+                        //xQueueOverwrite(qLCD, &lcd);
+                        xQueueSend(qLCD, &lcd, portMAX_DELAY);
                         taskYIELD();
                     }
                     opc = 0;
@@ -327,8 +366,10 @@ void task_Setear(void *params)
                         // Muestro valor actualizado en LCD
                         sprintf(lcd.text, "%4d", menu[indice].valor);
                         lcd.line = 1;
+                        lcd.clear = 0;
                         ///// -> LCD
-                        xQueueOverwrite(qLCD, &lcd);
+                        //xQueueOverwrite(qLCD, &lcd);
+                        xQueueSend(qLCD, &lcd, portMAX_DELAY);
                         taskYIELD();
                     }
                     opc = 0;
@@ -349,11 +390,15 @@ void task_Setear(void *params)
             // GUARDANDO CONFIG ... -> LCD
             sprintf(lcd.text, "GUARDANDO");
             lcd.line = 0;
-            xQueueOverwrite(qLCD, &lcd);
+            lcd.clear = 1;
+            //xQueueOverwrite(qLCD, &lcd);
+            xQueueSend(qLCD, &lcd, portMAX_DELAY);
             taskYIELD();
             sprintf(lcd.text, "CONFIGURACION");
             lcd.line = 1;
-            xQueueOverwrite(qLCD, &lcd);
+            lcd.clear = 0;
+            //xQueueOverwrite(qLCD, &lcd);
+            xQueueSend(qLCD, &lcd, portMAX_DELAY);
             taskYIELD();
             // DELAY 1SEG
             // MENU -> settings
@@ -430,9 +475,9 @@ int main()
     gpio_set_dir(ENC_B_PIN, false);
     gpio_set_dir(PULS_PIN, false);
     // Habilito las IRQ
-    gpio_set_irq_enabled_with_callback(ENC_A_PIN, GPIO_IRQ_EDGE_RISE, true, &irq_encoderA);
-    gpio_set_irq_enabled_with_callback(ENC_B_PIN, GPIO_IRQ_EDGE_RISE, true, &irq_encoderB);
-    gpio_set_irq_enabled_with_callback(PULS_PIN, GPIO_IRQ_EDGE_RISE, true, &irq_pulsador);
+    gpio_set_irq_enabled_with_callback(PULS_PIN, GPIO_IRQ_EDGE_RISE, true, &irq_encoder);
+    gpio_set_irq_enabled(ENC_B_PIN, GPIO_IRQ_EDGE_RISE, true);
+    gpio_set_irq_enabled(ENC_A_PIN, GPIO_IRQ_EDGE_RISE, true);
 
     // I2C INIT
     i2c_init(i2c1, I2C1_FREQ);
@@ -447,7 +492,7 @@ int main()
     lcd_clear();
 
     // Inicializo BH1750
-    bh1750_init();
+    //bh1750_init();
 
     // Inicializo DS3231
     rtc_t init;
@@ -458,7 +503,7 @@ int main()
     init.day = 2;
     init.month = 7;
     init.year = 25;
-    rtc_load(init);
+    //rtc_load(init);
 
     // // Escribo EEPROM
     // uint8_t data[8];
@@ -520,7 +565,7 @@ int main()
     xSemaphoreGive(mI2C);
 
     // Creo queues
-    qCTRL = xQueueCreate(1, sizeof(char));
+    qCTRL = xQueueCreate(5, sizeof(char));
     qLCD = xQueueCreate(1, sizeof(qLCD_t));
     qLUX = xQueueCreate(1, sizeof(uint16_t));
     qPWM = xQueueCreate(1, sizeof(float));
@@ -535,7 +580,9 @@ int main()
     // xTaskCreate(task_EEPROM, "EEPROM", configMINIMAL_STACK_SIZE, NULL, 3, &tEEPROM);
     xTaskCreate(task_Setear, "SETEAR", 512, NULL, 2, &tPulsador);
     xTaskCreate(task_LedRun, "LEDRUN", configMINIMAL_STACK_SIZE, NULL, 2, &tRUN);
-    xTaskCreate(task_encoder, "Encoder", configMINIMAL_STACK_SIZE, NULL, 4, &tEncoder);
+    xTaskCreate(task_Pulsador, "Pulsador", 128, NULL, 4, NULL);
+    xTaskCreate(task_EncoderA, "EncoderA", 128, NULL, 4, NULL);
+    xTaskCreate(task_EncoderB, "EncoderB", 128, NULL, 4, NULL);
 
     // Enciendo el scheduler
     vTaskStartScheduler();
