@@ -53,11 +53,6 @@ typedef struct {
     uint8_t line;
 } qLCD_t;
 
-// Item de queue LUX
-typedef struct {
-    uint16_t lux;
-} qLUX_t;
-
 // ESTRUCTURA BASE DE SETTINGS
 typedef struct {
     uint16_t index; // 2B
@@ -90,7 +85,7 @@ void irq_pulsador(uint gpio, uint32_t events)
 {
     static BaseType_t taskWoken = pdTRUE;
     // Deshabilito irq para que no se redispare
-    gpio_set_irq_enabled(PULS_PIN, GPIO_IRQ_EDGE_RISE, false);
+    //gpio_set_irq_enabled(PULS_PIN, GPIO_IRQ_EDGE_FALL, false);
     xSemaphoreGiveFromISR(sPULS, &taskWoken);
 }
 
@@ -98,7 +93,7 @@ void irq_encoderA(uint gpio, uint32_t events)
 {
     static BaseType_t taskWoken = pdTRUE;
     // Deshabilito irq para que no se redispare
-    gpio_set_irq_enabled(ENC_A_PIN, GPIO_IRQ_EDGE_RISE, false);
+    //gpio_set_irq_enabled(ENC_A_PIN, GPIO_IRQ_EDGE_FALL, false);
     xSemaphoreGiveFromISR(sA, &taskWoken);
 }
 
@@ -106,7 +101,7 @@ void irq_encoderB(uint gpio, uint32_t events)
 {
     static BaseType_t taskWoken = pdTRUE;
     // Deshabilito irq para que no se redispare
-    gpio_set_irq_enabled(ENC_B_PIN, GPIO_IRQ_EDGE_RISE, false);
+    //gpio_set_irq_enabled(ENC_B_PIN, GPIO_IRQ_EDGE_FALL, false);
     xSemaphoreGiveFromISR(sB, &taskWoken);
 }
 
@@ -117,7 +112,7 @@ void task_encoder(void *pvParams)
         // SEMAFORO PULSADOR
         if(xSemaphoreTake(sPULS, portMAX_DELAY) == pdPASS){
             // tiempo de antirrebote
-            sleep_ms(DEBOUNCE_TIME);
+            vTaskDelay(pdMS_TO_TICKS(DEBOUNCE_TIME));
             // Verifico pulsador
             if(gpio_get(PULS_PIN)){
                 // Envio comando a la cola
@@ -129,7 +124,7 @@ void task_encoder(void *pvParams)
         // SEMAFORO ENCODER A
         if(xSemaphoreTake(sA, portMAX_DELAY) == pdPASS){
             // tiempo de antirrebote
-            sleep_ms(DEBOUNCE_TIME);
+            vTaskDelay(pdMS_TO_TICKS(DEBOUNCE_TIME));
             // Verifico pulsador
             if(gpio_get(ENC_A_PIN)){
                 // Envio comando a la cola
@@ -141,7 +136,7 @@ void task_encoder(void *pvParams)
         // SEMAFORO ENCODER B
         if(xSemaphoreTake(sB, portMAX_DELAY) == pdPASS){
             // tiempo de antirrebote
-            sleep_ms(DEBOUNCE_TIME);
+            vTaskDelay(pdMS_TO_TICKS(DEBOUNCE_TIME));
             // Verifico pulsador
             if(gpio_get(ENC_B_PIN)){
                 // Envio comando a la cola
@@ -276,9 +271,12 @@ void task_Setear(void *params)
             // settings <- EEPROM
             // Cargo valores al menu
             // menu.valor <- settings
-
-            // indice del menu == 0
+        
+            // limpio variable
+            opc = 0;
+            // indice del menu = 0
             indice = 0;
+            // muestro primer menu
             show_menu = 1;
             
             // Entro en el loop de ejecucion del menu
@@ -289,6 +287,7 @@ void task_Setear(void *params)
                     sprintf(lcd.text, "%s", menu[indice].texto);
                     lcd.line = 0;
                     ///// -> LCD
+                    // xQueueSend(qLCD, &lcd, 0);
                     xQueueOverwrite(qLCD, &lcd);
                     taskYIELD();
                     // Muestro valor actualizado en LCD
@@ -308,7 +307,7 @@ void task_Setear(void *params)
                 if(rx != pdPASS) continue;
                 // Comando
                 switch (opc){
-                case 'U':
+                case 'H':
                     // INCREMENTAR si menor al maximo
                     if(menu[indice].valor < menu[indice].max){
                         menu[indice].valor++;
@@ -319,8 +318,9 @@ void task_Setear(void *params)
                         xQueueOverwrite(qLCD, &lcd);
                         taskYIELD();
                     }
+                    opc = 0;
                     break;
-                case 'D':
+                case 'A':
                     // DECREMENTAR si mayor al minimo
                     if(menu[indice].valor > menu[indice].min){
                         menu[indice].valor--;
@@ -331,12 +331,14 @@ void task_Setear(void *params)
                         xQueueOverwrite(qLCD, &lcd);
                         taskYIELD();
                     }
+                    opc = 0;
                     break;
                 case 'P':
                     // Salto al proximo item del menu
                     indice++;
                     // Mostrar nueva pagina del menu
                     show_menu = 1;
+                    opc = 0;
                     break;
                 default:
                     break;
@@ -520,7 +522,7 @@ int main()
     // Creo queues
     qCTRL = xQueueCreate(1, sizeof(char));
     qLCD = xQueueCreate(1, sizeof(qLCD_t));
-    qLUX = xQueueCreate(1, sizeof(qLUX_t));
+    qLUX = xQueueCreate(1, sizeof(uint16_t));
     qPWM = xQueueCreate(1, sizeof(float));
     qEread = xQueueCreate(1, sizeof(rtc_t));
     qEwrite = xQueueCreate(1, sizeof(rtc_t));
@@ -531,7 +533,7 @@ int main()
     // xTaskCreate(task_PWM, "PWM", configMINIMAL_STACK_SIZE, NULL, 2, &tPWM);
     xTaskCreate(task_LCD, "LCD", configMINIMAL_STACK_SIZE, NULL, 3, &tLCD);
     // xTaskCreate(task_EEPROM, "EEPROM", configMINIMAL_STACK_SIZE, NULL, 3, &tEEPROM);
-    xTaskCreate(task_Setear, "SETEAR", configMINIMAL_STACK_SIZE, NULL, 2, &tPulsador);
+    xTaskCreate(task_Setear, "SETEAR", 512, NULL, 2, &tPulsador);
     xTaskCreate(task_LedRun, "LEDRUN", configMINIMAL_STACK_SIZE, NULL, 2, &tRUN);
     xTaskCreate(task_encoder, "Encoder", configMINIMAL_STACK_SIZE, NULL, 4, &tEncoder);
 
