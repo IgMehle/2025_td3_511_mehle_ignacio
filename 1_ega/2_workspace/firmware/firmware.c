@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
 #include "hardware/pwm.h"
@@ -16,11 +17,9 @@
 #include "queue.h"
 #include "semphr.h"
 
-#define I2C1_FREQ       100000
+// PINOUT
 #define I2C1_SDA_PIN    18
 #define I2C1_SCL_PIN    19
-#define LCD_ADDR        0x27
-
 #define PWM_OUT_PIN     22
 #define ENC_A_PIN       14
 #define ENC_B_PIN       15
@@ -31,19 +30,26 @@
 #define AL_LO_PIN       20
 #define AL_HI_PIN       21
 #define BUZZER_PIN      12
-
-#define LED_ON 	        0
-#define LED_OFF	        1
+// CONSTANTES
 #define DEBOUNCE_TIME   20
-
+#define I2C1_FREQ       100000
+#define LCD_ADDR        0x27
 #define MENU_SIZE       5
-
 #define EEPROM_QUEUE_SIZE   1
 #define EEPROM_DATA_BASE    0x0010
 #define EEPROM_DATA_SIZE    0x0010
+// MACROS SALIDAS DIGITALES
+#define LED1_ON         gpio_put(LED1_PIN, false)
+#define LED1_OFF        gpio_put(LED1_PIN, true)
+#define LED2_ON         gpio_put(LED2_PIN, false)
+#define LED2_OFF        gpio_put(LED2_PIN, true)
+#define ALARMA_LO_ON    gpio_put(AL_LO_PIN, false)
+#define ALARMA_LO_OFF   gpio_put(AL_LO_PIN, true)
+#define ALARMA_HI_ON    gpio_put(AL_HI_PIN, false)
+#define ALARMA_HI_OFF   gpio_put(AL_HI_PIN, true)
 
 // Handles de tareas
-TaskHandle_t tPWM, tBH1750, tEEPROM, tLCD, tEncoder, tPulsador, tRUN;
+TaskHandle_t tPWM, tBH1750, tEEPROM, tLCD, tEncoder, tPulsador, tRUN, tSetup;
 // Queues de datos inter tarea
 QueueHandle_t  qCTRL, qPWM, qLUX, qLCD, qEread, qEwrite;
 // Queue Set de task_EEPROM
@@ -55,7 +61,7 @@ QueueHandle_t qEwrite, qEwritecalib, qEread, qEreadcalib, qElog;
 // Mutex bus I2C1
 SemaphoreHandle_t mI2C;
 // Semaforos de control
-SemaphoreHandle_t sPULS, sA, sB, sRefresh;
+SemaphoreHandle_t sPULS, sA, sB, sRefresh, sCalib;
 
 // ITEM DE QUEUE LCD
 typedef struct {
@@ -107,12 +113,16 @@ typedef struct {
 
 // Estructura para dump request
 typedef struct {
-    QueueHandle_t log_q;
+    QueueHandle_t responseQueue;
+    uint16_t start_address;
+    uint16_t length;
 } eepromDumpRequest_t;
 
 // Estructura para clear request
 typedef struct {
-    QueueHandle_t clear_q; // puede ser NULL
+    uint16_t start_address;
+    uint16_t length;
+    QueueHandle_t doneSignal; // puede ser NULL
 } eepromClearRequest_t;
 
 // // ----- STRINGS PARA IMPRIMIR EN LCD ----- //
@@ -150,8 +160,8 @@ void bytes2settings(settings_t *settings, uint8_t *bytes)
 {
     settings->index = ((bytes[0]<<8) & 0xFF00) + bytes[1];
     settings->lux = ((bytes[2]<<8) & 0xFF00) + bytes[3];
-    settings->user_max = ((bytes[0]<<8) & 0xFF00) + bytes[1];
-    settings->user_min = ((bytes[0]<<8) & 0xFF00) + bytes[1];
+    settings->user_max = ((bytes[4]<<8) & 0xFF00) + bytes[5];
+    settings->user_min = ((bytes[6]<<8) & 0xFF00) + bytes[7];
     settings->curva = bytes[8];
     settings->time.sec = bytes[9];
     settings->time.min = bytes[10];
@@ -178,15 +188,11 @@ void irq_encoder(uint gpio, uint32_t events)
         default:
             break;
     }
-    // if (gpio == PULS_PIN) {
-    //     xSemaphoreGiveFromISR(sPULS, &taskWoken);
-    // } else if (gpio == ENC_A_PIN) {
-    //     xSemaphoreGiveFromISR(sA, &taskWoken);
-    // } else if (gpio == ENC_B_PIN) {
-    //     xSemaphoreGiveFromISR(sB, &taskWoken);
-    // }
-    // Deshabilito irq para que no se redispare
-    //gpio_set_irq_enabled(PULS_PIN, GPIO_IRQ_EDGE_FALL, false);
+}
+
+void task_Setup(void *pvParams)
+{
+
 }
 
 void task_Pulsador(void *pvParams)
@@ -195,23 +201,8 @@ void task_Pulsador(void *pvParams)
     while(1){
         // SEMAFORO PULSADOR
         if(xSemaphoreTake(sPULS, portMAX_DELAY) == pdPASS){
-            // Envio comando a la cola
             xQueueOverwrite(qCTRL, &comando);
-            // tiempo de antirrebote
-            //vTaskDelay(pdMS_TO_TICKS(DEBOUNCE_TIME));
-            // Verifico pulsador
-            //if(gpio_get(PULS_PIN)){
-                // Envio comando a la cola
-                //comando = 'P';
-                //xQueueSend(qCTRL, &comando, portMAX_DELAY);
-                //xQueueOverwrite(qCTRL, &comando);
-                //gpio_set_irq_enabled(PULS_PIN, GPIO_IRQ_EDGE_RISE, true);
-            //}
         }
-        // VUELVO A HABILITAR IRQS
-        //irq_set_enabled(GPIO_IRQ_EDGE_RISE, true);
-        // Fuerzo cambio de contexto
-        // taskYIELD();
     }
 }
 
@@ -222,16 +213,6 @@ void task_EncoderA(void *pvParams)
         // SEMAFORO ENCODER A
         if(xSemaphoreTake(sA, portMAX_DELAY) == pdPASS){
             xQueueOverwrite(qCTRL, &comando);
-            // tiempo de antirrebote
-            //vTaskDelay(pdMS_TO_TICKS(DEBOUNCE_TIME));
-            // Verifico pulsador
-            //if(gpio_get(ENC_A_PIN)){
-                // Envio comando a la cola
-                //comando = 'A';
-                //xQueueSend(qCTRL, &comando, portMAX_DELAY);
-                //xQueueOverwrite(qCTRL, &comando);
-                //gpio_set_irq_enabled(PULS_PIN, GPIO_IRQ_EDGE_RISE, true);
-            //}
         }
     }
 }
@@ -243,39 +224,55 @@ void task_EncoderB(void *pvParams)
         // SEMAFORO ENCODER B
         if(xSemaphoreTake(sB, portMAX_DELAY) == pdPASS){
             xQueueOverwrite(qCTRL, &comando);
-            // tiempo de antirrebote
-            //vTaskDelay(pdMS_TO_TICKS(DEBOUNCE_TIME));
-            // Verifico pulsador
-            //if(gpio_get(ENC_B_PIN)){
-                // Envio comando a la cola
-                //comando = 'H';
-                //xQueueSend(qCTRL, &comando, portMAX_DELAY);
-                //xQueueOverwrite(qCTRL, &comando);
-                //gpio_set_irq_enabled(PULS_PIN, GPIO_IRQ_EDGE_RISE, true);
-            //}
         }
     }
 }
 
 void task_PWM(void *pvParams)
 {
-    while(1){
+    //Cargo el slice fisico del pin
+    uint slice_num = pwm_gpio_to_slice_num(PWM_OUT_PIN);
+    //Frec de clock de la pico 2
+    float clock_freq = 125000000.f;              
+    float freq = 1000.0;
+    float divider = clock_freq / (freq * 8192);
+    float duty = 0.0;
 
+    while(1){
+        if (xQueueReceive(qPWM, &duty, portMAX_DELAY) == pdPASS){
+            //Pongo el pin como pwm
+            gpio_set_function(PWM_OUT_PIN, GPIO_FUNC_PWM);
+            //Calculo con precision de 16 bits de la frec que se quiere--65536        
+            //divider = clock_freq / (freq * 8192);    
+            pwm_set_clkdiv(slice_num, divider);
+            //16 bit de resolucion para el conteo maximo del ciclo de PWM--65535
+            pwm_set_wrap(slice_num, 8191);                 
+            //Calcula el duty cycle--65536
+            pwm_set_gpio_level(PWM_OUT_PIN, duty * 8192);
+            // Habilitab el PWM en el pin            
+            pwm_set_enabled(slice_num, true);                
+        }
     }
 }
 
 void task_BH1750(void *pvParams)
 {
-    uint16_t lux;
+    uint16_t lux = 0;
     while(1){
         // Si puedo tomar el bus
-        if(xSemaphoreTake(mI2C, portMAX_DELAY) == pdPASS){
-            // Leo luxometro
-            lux = bh1750_read();
-            xSemaphoreGive(mI2C);
-            // Paso a la cola
-            xQueueOverwrite(qLUX, &lux);
-        }
+        // if(xSemaphoreTake(mI2C, portMAX_DELAY) == pdPASS){
+        //     // Leo luxometro
+        //     lux = bh1750_read();
+        //     xSemaphoreGive(mI2C);
+        //     // Paso a la cola
+        //     xQueueOverwrite(qLUX, &lux);
+        // }
+        //////////////////////////////////////
+        // Funcion de prueba
+        lux = lux + 100;
+        if(lux > 1000) lux = 0;
+        xQueueOverwrite(qLUX, &lux);
+        //////////////////////////////////////
         // Corre cada 150ms
         vTaskDelay(pdMS_TO_TICKS(150));
     }
@@ -286,8 +283,8 @@ void task_EEPROM(void *pvParams)
     // request de datos
     QueueHandle_t read_q;
     QueueHandle_t calib_q;
-    QueueHandle_t dump_q;
-    QueueHandle_t clear_q;
+    eepromDumpRequest_t dump_q;
+    eepromClearRequest_t clear_q;
     //read_req.read_q = qEread;
     //calib_req.calib_q = qEreadcalib,
     //dump_req.log_q = qElog;
@@ -301,8 +298,11 @@ void task_EEPROM(void *pvParams)
     uint16_t address = 0x0000;
     uint16_t index = 0;
 
+    uint8_t buffer[64];
+
     while(1){
         active_queue = xQueueSelectFromSet(qsetEEPROM, portMAX_DELAY);
+
         // ESCRITURA SETTINGS
         if (active_queue == qEwrite)
         {
@@ -311,7 +311,7 @@ void task_EEPROM(void *pvParams)
                 // Calculo address
                 address = index*EEPROM_DATA_SIZE + EEPROM_DATA_BASE;
                 // Desempaqueto
-                settings2bytes(&settings, &bf);
+                settings2bytes(&settings, bf);
                 // Intento tomar el bus
                 if(xSemaphoreTake(mI2C, portMAX_DELAY) == pdPASS){
                     // Escribo settings en la eeprom
@@ -332,7 +332,7 @@ void task_EEPROM(void *pvParams)
                     xSemaphoreGive(mI2C);
                 }
                 // Empaqueto
-                bytes2settings(&settings, &bf);
+                bytes2settings(&settings, bf);
                 // Mando a la cola de lectura
                 xQueueSend(qEread, &settings, portMAX_DELAY);
                 //xQueueSend(read_q, &bf, portMAX_DELAY);
@@ -368,13 +368,32 @@ void task_EEPROM(void *pvParams)
         // LOGGER DE DATOS
         else if (active_queue == qEdumpReq){
             if(xQueueReceive(qEdumpReq, &dump_q, 0) == pdPASS){
-
+                ////////////////////////////////////////////////////////
+                uint16_t offset = 0;
+                while (offset < dump_q.length) {
+                    uint16_t chunk = (dump_q.length - offset > sizeof(buffer)) ? sizeof(buffer) : dump_q.length - offset;
+                    eeprom_read(buffer, dump_q.start_address + offset, chunk);
+                    xQueueSend(dump_q.responseQueue, buffer, portMAX_DELAY);
+                    offset += chunk;
+                }
+                ////////////////////////////////////////////////////////
             }
         }
         // BORRADO DE DATOS
         else if (active_queue == qEclearReq){
             if(xQueueReceive(qEclearReq, &clear_q, 0) == pdPASS){
-                
+                //////////////////////////////////////////////////////////////////////
+                memset(buffer, 0xFF, sizeof(buffer)); // EEPROM default erased value
+                uint16_t offset = 0;
+                while (offset < clear_q.length) {
+                    uint16_t chunk = (clear_q.length - offset > sizeof(buffer)) ? sizeof(buffer) : clear_q.length - offset;
+                    eeprom_write(buffer, clear_q.start_address + offset, chunk);
+                    offset += chunk;
+                }
+                if (clear_q.doneSignal) {
+                    xQueueSend(clear_q.doneSignal, NULL, 0);
+                }
+                ///////////////////////////////////////////////////////////////////////
             }
         }
     }
@@ -407,7 +426,7 @@ void task_Setear(void *params)
     // respuesta de lectura de queue
     BaseType_t rx;
     // request de lectura de datos
-    QueueHandle_t read_req = qEreadReq;
+    QueueHandle_t read_req = qEread;
     // struct de hora
     rtc_t time = {0};
     // lineas del lcd
@@ -523,7 +542,9 @@ void task_Setear(void *params)
                 }
             }
             // Si calibracion == 1
-            // calibracion();
+            xSemaphoreGive(sCalib);
+            taskYIELD();
+            
 
             // Leo la hora en el rtc
             if(xSemaphoreTake(mI2C, portMAX_DELAY) == pdPASS){
@@ -560,27 +581,60 @@ void task_Setear(void *params)
     }   
 }
 
+void task_Calibracion(void *pvParams)
+{
+    // respuesta de lectura de queue
+    BaseType_t rx;
+    // request de lectura de datos
+    QueueHandle_t calib_req = qEreadcalib;
+    while(1){
+        if(xSemaphoreTake(sCalib, portMAX_DELAY) == pdPASS){
+            // qEreadcalib <- EEPROM
+            /////////////////
+            // CALIBRACION //
+            /////////////////
+            // qEwritecalib -> EEPROM
+            LED2_ON;
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            LED2_OFF;
+        }
+    }
+}
+
 void task_Control(void *pvParams)
 {
+    // request de lectura de datos
+    QueueHandle_t read_req = qEread;
+    QueueHandle_t calib_req = qEreadcalib;
+    // Settings
     settings_t settings;
     calibration_t calib;
     uint16_t lux;
-    float delta;
+    float duty;
     qLCD_t lcd;
     rtc_t time;
     uint8_t bf[7];
 
     while(1){
-        // Actualizar seteos ? (NO BLOQUEANTE)
+        // Actualizar seteos y calibracion ? (NO BLOQUEANTE)
         if(xSemaphoreTake(sRefresh, 0)){
             // Levanto valores de la eeprom
+            xQueueSend(qEreadReq, &read_req, portMAX_DELAY);
+            taskYIELD();
+            xQueueReceive(qEread, &settings, portMAX_DELAY);
+            xQueueSend(qEcalibReq, &calib_req, portMAX_DELAY);
+            taskYIELD();
+            xQueueReceive(qEreadcalib, &calib, portMAX_DELAY);
         }
         // Hay lectura del luxometro ?
         if(xQueueReceive(qLUX, &lux, portMAX_DELAY) == pdPASS){
             /////////////////
             // CONTROL PWM //
             /////////////////
-            xQueueSend(qPWM, &delta, portMAX_DELAY);
+            // Funcion de test de pwm
+            duty = lux / 1000.0;
+            //////////////////////////////////////////
+            xQueueSend(qPWM, &duty, portMAX_DELAY);
 
             // Armo el texto para el LCD
             sprintf(lcd.text, "LUX: %d", lux);
@@ -617,6 +671,86 @@ void task_LedRun(void *pvParams)
     }
 }
 
+void task_Consola(void *params) {
+    char cmd[32];
+    int addr, len;
+
+    for (;;) {
+        printf("\nComando (dump / clear / exit): ");
+        fflush(stdout);
+
+        // Leer comando por consola
+        if (scanf("%31s", cmd) == 1) {
+            
+            if (strcmp(cmd, "dump") == 0) {
+                printf("Direccion inicial: ");
+                scanf("%d", &addr);
+                printf("Longitud: ");
+                scanf("%d", &len);
+
+                // Crear cola de respuesta para recibir bloques
+                QueueHandle_t qResp = xQueueCreate(16, sizeof(uint8_t[64]));
+
+                eepromDumpRequest_t req = {
+                    .start_address = addr,
+                    .length = len,
+                    .responseQueue = qResp
+                };
+
+                xQueueSend(qEdumpReq, &req, portMAX_DELAY);
+
+                // Recibir datos y mostrarlos
+                int bloques = (len + 63) / 64;
+                for (int i = 0; i < bloques; i++) {
+                    uint8_t buffer[64];
+                    xQueueReceive(qResp, buffer, portMAX_DELAY);
+                    for (int j = 0; j < 64 && (i*64+j) < len; j++) {
+                        printf("%02X ", buffer[j]);
+                    }
+                    printf("\n");
+                }
+
+                vQueueDelete(qResp);
+            }
+
+            else if (strcmp(cmd, "clear") == 0) {
+                printf("Direccion inicial: ");
+                scanf("%d", &addr);
+                printf("Longitud: ");
+                scanf("%d", &len);
+
+                QueueHandle_t qDone = xQueueCreate(1, sizeof(uint8_t));
+
+                eepromClearRequest_t clr = {
+                    .start_address = addr,
+                    .length = len,
+                    .doneSignal = qDone
+                };
+
+                xQueueSend(qEclearReq, &clr, portMAX_DELAY);
+
+                // Esperar confirmación
+                uint8_t dummy;
+                xQueueReceive(qDone, &dummy, portMAX_DELAY);
+
+                printf("Borrado completado.\n");
+                vQueueDelete(qDone);
+            }
+
+            else if (strcmp(cmd, "exit") == 0) {
+                printf("Saliendo...\n");
+                vTaskDelete(NULL);
+            }
+
+            else {
+                printf("Comando no reconocido.\n");
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+
+
 int main()
 {
     stdio_init_all();
@@ -651,57 +785,57 @@ int main()
 
     // Inicializo DS3231
     rtc_t init;
-    init.sec = 30;
+    init.sec = 00;
     init.min = 10;
-    init.hour = 20;
-    init.weekday = 3;
-    init.day = 2;
-    init.month = 7;
+    init.hour = 21;
+    init.weekday = 4;
+    init.day = 7;
+    init.month = 8;
     init.year = 25;
-    //rtc_load(init);
+    rtc_load(init);
 
-    // // Escribo EEPROM
-    // uint8_t data[8];
-    // data[0] = 'h';
-    // data[1] = 'o';
-    // data[2] = 'l';
-    // data[3] = 'a';
-    // data[4] = 'P';
-    // data[5] = 'I';
-    // data[6] = 'C';
-    // data[7] = 'O';
-    // uint16_t eeprom_address = 0x0010;
-    // eeprom_write(data, eeprom_address, 8);
+    // Escribo EEPROM
+    uint8_t data[16];
+    settings_t settings;
+    settings.index = 1;
+    settings.lux = 10;
+    settings.user_max = 99;
+    settings.user_min = 1;
+    settings.curva = 0;
+    settings.time = init;
+    settings2bytes(&settings, data);
+    uint16_t eeprom_address = 0x0010;
+    eeprom_write(data, eeprom_address, 16);
 
     // Init LED RUN
     gpio_init(LED_RUN_PIN);
     gpio_set_dir(LED_RUN_PIN, true);
-    gpio_put(LED_RUN_PIN, LED_OFF);
+    gpio_put(LED_RUN_PIN, false);
 
     // Init LED 1
     gpio_init(LED1_PIN);
     gpio_set_dir(LED1_PIN, true);
-    gpio_put(LED1_PIN, LED_OFF);
+    gpio_put(LED1_PIN, false);
 
     // Init LED 2
     gpio_init(LED2_PIN);
     gpio_set_dir(LED2_PIN, true);
-    gpio_put(LED2_PIN, LED_OFF);
+    gpio_put(LED2_PIN, false);
 
     // Init ALARMA LO
     gpio_init(AL_LO_PIN);
     gpio_set_dir(AL_LO_PIN, true);
-    gpio_put(AL_LO_PIN, LED_OFF);
+    gpio_put(AL_LO_PIN, false);
 
     // Init ALARMA HI
     gpio_init(AL_HI_PIN);
     gpio_set_dir(AL_HI_PIN, true);
-    gpio_put(AL_HI_PIN, LED_OFF);
+    gpio_put(AL_HI_PIN, false);
 
     // Init BUZZER
     gpio_init(BUZZER_PIN);
     gpio_set_dir(BUZZER_PIN, true);
-    gpio_put(BUZZER_PIN, LED_OFF);
+    gpio_put(BUZZER_PIN, false);
 
     // Creo semaforos binarios y los libero
     vSemaphoreCreateBinary(sPULS);
@@ -711,6 +845,9 @@ int main()
     vSemaphoreCreateBinary(sB);
     xSemaphoreGive(sB);
     vSemaphoreCreateBinary(sRefresh);
+    xSemaphoreGive(sRefresh);
+    vSemaphoreCreateBinary(sCalib);
+    xSemaphoreGive(sCalib);
     
     // Creo mutex y lo libero
     mI2C = xSemaphoreCreateMutex();
@@ -724,41 +861,39 @@ int main()
     // Creo queues "semaforo" de eeprom
     qEreadReq = xQueueCreate(1, sizeof(QueueHandle_t));
     qEcalibReq = xQueueCreate(1, sizeof(QueueHandle_t));
-    qEdumpReq = xQueueCreate(1, sizeof(QueueHandle_t));
-    qEclearReq = xQueueCreate(1, sizeof(QueueHandle_t));
+    qEdumpReq = xQueueCreate(1, sizeof(eepromDumpRequest_t));
+    qEclearReq = xQueueCreate(1, sizeof(eepromClearRequest_t));
     // Creo queues de datos de eeprom
     qEwrite = xQueueCreate(1, sizeof(settings_t));
     qEwritecalib = xQueueCreate(1, sizeof(calibration_t));
     qEread = xQueueCreate(1, sizeof(settings_t));
     qEreadcalib = xQueueCreate(1, sizeof(calibration_t));
-    qElog = xQueueCreate(1, sizeof(char)); 
-
-    // Queues de manejo de eeprom
-//QueueHandle_t qEreadReq, qEcalibReq, qEdumpReq, qEclearReq;
-// Queues de datos de eeprom
-//QueueHandle_t qEwrite, qEcalib, qEread, qEreadCalib;
+    //qElog = xQueueCreate(1, sizeof(char)); 
 
     // Creo queue set de eeprom
     qsetEEPROM = xQueueCreateSet(EEPROM_QUEUE_SIZE*6);
     // Agrego las colas al set
     xQueueAddToSet(qEreadReq, qsetEEPROM);
     xQueueAddToSet(qEcalibReq, qsetEEPROM);
-    xQueueAddToSet(qEdumpReq, qsetEEPROM);
-    xQueueAddToSet(qEclearReq, qsetEEPROM);
     xQueueAddToSet(qEwrite, qsetEEPROM);
     xQueueAddToSet(qEwritecalib, qsetEEPROM);
+    xQueueAddToSet(qEdumpReq, qsetEEPROM);
+    xQueueAddToSet(qEclearReq, qsetEEPROM);
 
     // Creo tareas
-    // xTaskCreate(task_Control, "CONTROL", 2*configMINIMAL_STACK_SIZE, NULL, 1, NULL);
-    // xTaskCreate(task_BH1750, "BH1750", configMINIMAL_STACK_SIZE, NULL, 2, &tBH1750);
-    // xTaskCreate(task_PWM, "PWM", configMINIMAL_STACK_SIZE, NULL, 2, &tPWM);
-    xTaskCreate(task_LCD, "LCD", 128, NULL, 3, &tLCD);
-    xTaskCreate(task_EEPROM, "EEPROM", 256, NULL, 3, &tEEPROM);
-    xTaskCreate(task_Setear, "SETEAR", 512, NULL, 2, &tPulsador);
-    xTaskCreate(task_LedRun, "LEDRUN", 128, NULL, 2, &tRUN);
-    xTaskCreate(task_Pulsador, "Pulsador", 128, NULL, 4, NULL);
-    xTaskCreate(task_EncoderA, "EncoderA", 128, NULL, 4, NULL);
-    xTaskCreate(task_EncoderB, "EncoderB", 128, NULL, 4, NULL);
+    xTaskCreate(task_Control, "Control", 2*configMINIMAL_STACK_SIZE, NULL, 1, NULL);
+    xTaskCreate(task_BH1750, "BH1750", configMINIMAL_STACK_SIZE, NULL, 2, &tBH1750);
+    xTaskCreate(task_PWM, "PWM", configMINIMAL_STACK_SIZE, NULL, 2, &tPWM);
+    xTaskCreate(task_Setear, "Setear", 512, NULL, 2, &tPulsador);
+    xTaskCreate(task_LedRun, "Run", 128, NULL, 2, &tRUN);
+    xTaskCreate(task_Calibracion, "Calibracion", 256, NULL, 3, NULL);
+    // xTaskCreate(task_Consola, "Consola", 1024, NULL, 3, NULL);
+    xTaskCreate(task_LCD, "LCD", 128, NULL, 4, &tLCD);
+    xTaskCreate(task_EEPROM, "EEPROM", 1024, NULL, 4, &tEEPROM);
+    xTaskCreate(task_Pulsador, "Pulsador", 128, NULL, 5, NULL);
+    xTaskCreate(task_EncoderA, "EncoderA", 128, NULL, 5, NULL);
+    xTaskCreate(task_EncoderB, "EncoderB", 128, NULL, 5, NULL);
+    //xTaskCreate(task_Setup, "SETUP", 1024, NULL, 6, NULL);
 
     // Enciendo el scheduler
     vTaskStartScheduler();
