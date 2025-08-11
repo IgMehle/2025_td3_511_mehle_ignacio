@@ -61,11 +61,11 @@ QueueHandle_t qIRQ, qCTRL, qPWM, qLUX, qLCD;
 // Queues de manejo de eeprom
 QueueHandle_t qEcontrol;
 // Queues de datos de eeprom
-QueueHandle_t qEwrite, qEwritecalib, qEread, qEreadcalib;
+QueueHandle_t qEwrite, qEwritecalib, qEread, qEreadcalib, qEdump;
 // Mutex bus I2C1
 SemaphoreHandle_t mI2C;
 // Semaforos de control
-SemaphoreHandle_t sPULS, sA, sB, sRefresh, sCalib;
+SemaphoreHandle_t sRefresh, sCalib, sEfull, sEempty;
 
 // ITEM DE QUEUE LCD
 typedef struct {
@@ -117,16 +117,16 @@ typedef struct {
 // Estructura para dump request
 typedef struct {
     QueueHandle_t responseQueue;
-    uint16_t start_address;
+    // uint16_t start_address;
     uint16_t length;
 } eepromDumpRequest_t;
 
 // Estructura para clear request
-typedef struct {
-    uint16_t start_address;
-    uint16_t length;
-    QueueHandle_t doneSignal; // puede ser NULL
-} eepromClearRequest_t;
+// typedef struct {
+//     uint16_t start_address;
+//     uint16_t length;
+//     QueueHandle_t doneSignal; // puede ser NULL
+// } eepromClearRequest_t;
 
 // // ----- STRINGS PARA IMPRIMIR EN LCD ----- //
 // char text1[] = {"NIVEL LUX:"};
@@ -174,24 +174,6 @@ void bytes2settings(settings_t *settings, uint8_t *bytes)
     settings->time.month = bytes[14];
     settings->time.year = bytes[15];
 }
-
-// void irq_gpio_rise(uint gpio, uint32_t events)
-// {
-//     static BaseType_t taskWoken = pdTRUE;
-//     switch(gpio){
-//         case PULS_PIN:
-//             xSemaphoreGiveFromISR(sPULS, &taskWoken);
-//             break;
-//         case ENC_A_PIN:
-//             xSemaphoreGiveFromISR(sA, &taskWoken);
-//             break;
-//         case ENC_B_PIN:
-//             xSemaphoreGiveFromISR(sB, &taskWoken);
-//             break;
-//         default:
-//             break;
-//     }
-// }
 
 void irq_gpio_rise(uint gpio, uint32_t events)
 {
@@ -250,46 +232,20 @@ void task_Encoder(void *pvParams)
                 comando = 'P';
                 xQueueSend(qCTRL, &comando, pdMS_TO_TICKS(50));
                 break;
-            
+            case ENC_A_RISE:
+                break;
+            case ENC_B_RISE:
+                break;
+            case ENC_A_FALL:
+                break;
+            case ENC_B_FALL:
+                break;
             default:
                 break;
             }
         }
     }
 }
-
-// void task_Pulsador(void *pvParams)
-// {
-//     char comando = 'P';
-//     while(1){
-//         // SEMAFORO PULSADOR
-//         if(xSemaphoreTake(sPULS, portMAX_DELAY) == pdPASS){
-//             xQueueOverwrite(qCTRL, &comando);
-//         }
-//     }
-// }
-
-// void task_EncoderA(void *pvParams)
-// {
-//     char comando = 'A';
-//     while(1){
-//         // SEMAFORO ENCODER A
-//         if(xSemaphoreTake(sA, portMAX_DELAY) == pdPASS){
-//             xQueueOverwrite(qCTRL, &comando);
-//         }
-//     }
-// }
-
-// void task_EncoderB(void *pvParams)
-// {
-//     char comando = 'H';
-//     while(1){
-//         // SEMAFORO ENCODER B
-//         if(xSemaphoreTake(sB, portMAX_DELAY) == pdPASS){
-//             xQueueOverwrite(qCTRL, &comando);
-//         }
-//     }
-// }
 
 void task_PWM(void *pvParams)
 {
@@ -346,11 +302,13 @@ void task_EEPROM(void *pvParams)
     eeprom_cmd_t comando;
     settings_t settings;
     calibration_t calib;
+    eepromDumpRequest_t dump_q;
     uint8_t bf[16], bf_calib[16];
     uint16_t address = 0x0000;
     uint16_t index = 0;
-
-    uint8_t buffer[64];
+    // DUMP Y CLEAR
+    uint16_t offset;
+    uint16_t end;
 
     while(1){
         if(xQueueReceive(qEcontrol, &comando, portMAX_DELAY) == pdPASS){
@@ -412,27 +370,39 @@ void task_EEPROM(void *pvParams)
 
             case ECTRL_DUMP:
                 ////////////////////////////////////////////////////////
-                uint16_t offset = 0;
-                while (offset < dump_q.length) {
-                    uint16_t chunk = (dump_q.length - offset > sizeof(buffer)) ? sizeof(buffer) : dump_q.length - offset;
-                    eeprom_read(buffer, dump_q.start_address + offset, chunk);
-                    xQueueSend(dump_q.responseQueue, buffer, portMAX_DELAY);
-                    offset += chunk;
+                // Paso el numero de items en memoria
+                dump_q.length = index;
+                // creo cola de volcado
+                dump_q.responseQueue = xQueueCreate(index, sizeof(settings_t));
+                // apunto al inicio de los settings
+                offset = EEPROM_DATA_BASE;
+                // apunto al final de los settings
+                end = index * EEPROM_DATA_SIZE;
+                while (offset < end) {
+                    // leo datos y encolo
+                    eeprom_read(bf, offset, 16);
+                    bytes2settings(&settings, bf);
+                    if(xQueueSend(dump_q.responseQueue, &settings, portMAX_DELAY)==pdPASS){
+                        offset += EEPROM_DATA_SIZE;
+                    }
                 }
+                xQueueSend(qEdump, &dump_q, portMAX_DELAY);
                 ////////////////////////////////////////////////////////
                 break;
             case ECTRL_CLEAR:
                 //////////////////////////////////////////////////////////////////////
-                memset(buffer, 0xFF, sizeof(buffer)); // EEPROM default erased value
-                uint16_t offset = 0;
-                while (offset < clear_q.length) {
-                    uint16_t chunk = (clear_q.length - offset > sizeof(buffer)) ? sizeof(buffer) : clear_q.length - offset;
-                    eeprom_write(buffer, clear_q.start_address + offset, chunk);
-                    offset += chunk;
+                // EEPROM default erased value
+                memset(bf, 0xFF, sizeof(bf)); 
+                // apunto al inicio de los settings
+                offset = EEPROM_DATA_BASE;
+                // apunto al final de los settings
+                end = index * EEPROM_DATA_SIZE;
+                while (offset < index) {
+                    eeprom_write(bf, offset, 16);
+                    offset += EEPROM_DATA_SIZE;
                 }
-                if (clear_q.doneSignal) {
-                    xQueueSend(clear_q.doneSignal, NULL, 0);
-                }
+                index = 0;
+                xSemaphoreGive(sEempty);
                 ///////////////////////////////////////////////////////////////////////
                 break;
             default:
@@ -729,68 +699,43 @@ void task_LedRun(void *pvParams)
 
 void task_Consola(void *params) {
     char cmd[32];
-    int addr, len;
+    eeprom_cmd_t ecmd;
+    eepromDumpRequest_t dump;
+    settings_t settings;
 
-    for (;;) {
-        printf("\nComando (dump / clear / exit): ");
+    while(1) {
+        printf("\r\033[KComando (dump / clear / exit): ");
         fflush(stdout);
 
         // Leer comando por consola
-        if (scanf("%31s", cmd) == 1) {
-            
+        if (scanf("%31s", cmd) == 1) {     
             if (strcmp(cmd, "dump") == 0) {
-                printf("Direccion inicial: ");
-                scanf("%d", &addr);
-                printf("Longitud: ");
-                scanf("%d", &len);
-
-                // Crear cola de respuesta para recibir bloques
-                QueueHandle_t qResp = xQueueCreate(16, sizeof(uint8_t[64]));
-
-                eepromDumpRequest_t req = {
-                    .start_address = addr,
-                    .length = len,
-                    .responseQueue = qResp
-                };
-
-                xQueueSend(qEdumpReq, &req, portMAX_DELAY);
-
+                ecmd = ECTRL_DUMP;
+                xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
+                taskYIELD();
                 // Recibir datos y mostrarlos
-                int bloques = (len + 63) / 64;
-                for (int i = 0; i < bloques; i++) {
-                    uint8_t buffer[64];
-                    xQueueReceive(qResp, buffer, portMAX_DELAY);
-                    for (int j = 0; j < 64 && (i*64+j) < len; j++) {
-                        printf("%02X ", buffer[j]);
-                    }
-                    printf("\n");
+                xQueueReceive(qEdump, &dump, portMAX_DELAY);
+                // Puedo hacer un while o un for con la cantidad de items en dump.lenght
+                while(xQueueReceive(dump.responseQueue, &settings, portMAX_DELAY) == pdPASS){
+                    // Mientras pueda recibir de la cola, imprimo el registro
+                    printf("%d: (%02d/%02d %02d:%02d:%02d) Lux: %d, Max: %d, Min: %d, Curva: %d/n",
+                            settings.index, settings.time.day, settings.time.month,
+                            settings.time.year, settings.time.hour, settings.time.min,
+                            settings.time.sec, settings.lux, settings.user_max,
+                            settings.user_min, settings.curva);
                 }
-
-                vQueueDelete(qResp);
+                // Borro cola para limpiar RAM
+                vQueueDelete(dump.responseQueue);
             }
 
             else if (strcmp(cmd, "clear") == 0) {
-                printf("Direccion inicial: ");
-                scanf("%d", &addr);
-                printf("Longitud: ");
-                scanf("%d", &len);
-
-                QueueHandle_t qDone = xQueueCreate(1, sizeof(uint8_t));
-
-                eepromClearRequest_t clr = {
-                    .start_address = addr,
-                    .length = len,
-                    .doneSignal = qDone
-                };
-
-                xQueueSend(qEclearReq, &clr, portMAX_DELAY);
-
+                ecmd = ECTRL_CLEAR;
+                xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
+                taskYIELD();
                 // Esperar confirmación
-                uint8_t dummy;
-                xQueueReceive(qDone, &dummy, portMAX_DELAY);
-
-                printf("Borrado completado.\n");
-                vQueueDelete(qDone);
+                if(xSemaphoreTake(sEempty, portMAX_DELAY) == pdPASS){
+                    printf("Borrado completado.\n");
+                }
             }
 
             else if (strcmp(cmd, "exit") == 0) {
@@ -802,7 +747,7 @@ void task_Consola(void *params) {
                 printf("Comando no reconocido.\n");
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(100));
+        //vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
@@ -896,16 +841,13 @@ int main()
     gpio_put(BUZZER_PIN, false);
 
     // Creo semaforos binarios y los libero
-    vSemaphoreCreateBinary(sPULS);
-    xSemaphoreGive(sPULS);
-    vSemaphoreCreateBinary(sA);
-    xSemaphoreGive(sA);
-    vSemaphoreCreateBinary(sB);
-    xSemaphoreGive(sB);
     vSemaphoreCreateBinary(sRefresh);
     xSemaphoreGive(sRefresh);
     vSemaphoreCreateBinary(sCalib);
     xSemaphoreGive(sCalib);
+
+    vSemaphoreCreateBinary(sEfull);
+    vSemaphoreCreateBinary(sEempty);
     
     // Creo mutex y lo libero
     mI2C = xSemaphoreCreateMutex();
@@ -918,16 +860,12 @@ int main()
     qPWM = xQueueCreate(1, sizeof(float));
     // Creo queue de comando de eeprom
     qEcontrol = xQueueCreate(1, sizeof(uint8_t));
-    //qEreadReq = xQueueCreate(1, sizeof(QueueHandle_t));
-    //qEcalibReq = xQueueCreate(1, sizeof(QueueHandle_t));
-    //qEdumpReq = xQueueCreate(1, sizeof(eepromDumpRequest_t));
-    //qEclearReq = xQueueCreate(1, sizeof(eepromClearRequest_t));
     // Creo queues de datos de eeprom
     qEwrite = xQueueCreate(1, sizeof(settings_t));
     qEwritecalib = xQueueCreate(1, sizeof(calibration_t));
     qEread = xQueueCreate(1, sizeof(settings_t));
     qEreadcalib = xQueueCreate(1, sizeof(calibration_t));
-    //qElog = xQueueCreate(1, sizeof(char)); 
+    qEdump = xQueueCreate(1, sizeof(eepromDumpRequest_t)); 
 
     // Creo tareas
     xTaskCreate(task_Control, "Control", 256, NULL, 1, NULL);
@@ -936,12 +874,10 @@ int main()
     xTaskCreate(task_Setear, "Setear", 512, NULL, 2, &tPulsador);
     xTaskCreate(task_LedRun, "Run", 128, NULL, 2, &tRUN);
     xTaskCreate(task_Calibracion, "Calibracion", 256, NULL, 3, NULL);
-    // xTaskCreate(task_Consola, "Consola", 1024, NULL, 3, NULL);
+    xTaskCreate(task_Consola, "Consola", 1024, NULL, 3, NULL);
     xTaskCreate(task_LCD, "LCD", 128, NULL, 4, &tLCD);
     xTaskCreate(task_EEPROM, "EEPROM", 1024, NULL, 4, &tEEPROM);
-    xTaskCreate(task_Pulsador, "Pulsador", 128, NULL, 5, NULL);
-    xTaskCreate(task_EncoderA, "EncoderA", 128, NULL, 5, NULL);
-    xTaskCreate(task_EncoderB, "EncoderB", 128, NULL, 5, NULL);
+    xTaskCreate(task_Encoder, "Encoder", 128, NULL, 5, NULL);
     //xTaskCreate(task_Setup, "SETUP", 1024, NULL, 6, NULL);
 
     // Enciendo el scheduler
