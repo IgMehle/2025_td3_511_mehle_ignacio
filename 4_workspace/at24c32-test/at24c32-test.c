@@ -32,7 +32,7 @@ int main()
 
     int resp;
     uint8_t stat;
-    uint8_t data[8];
+    uint8_t data[16];
     data[0] = 'H';
     data[1] = 'O';
     data[2] = 'L';
@@ -41,8 +41,15 @@ int main()
     data[5] = 'i';
     data[6] = 'c';
     data[7] = 'o';
-    uint16_t eeprom_address = 0x0000;
-    uint8_t bytes[16];
+    data[8] = '2';
+    data[9] = '3';
+    data[10] = '5';
+    data[11] = '0';
+    data[12] = 'c';
+    data[13] = 'h';
+    data[14] = 'a';
+    data[15] = 'u';
+    uint8_t bytes[32];
 
     // uint8_t len = 4 + 2;
     // // Frame = Address + Data
@@ -66,7 +73,7 @@ int main()
     //         sleep_ms(1000);
     //     }
     // }
-    stat = eeprom_write(data, eeprom_address, 8);
+    stat = eeprom_write(data, 0x0010, 16);
     if (stat){
         while(true){
             printf("Error de escritura.\n");
@@ -75,8 +82,8 @@ int main()
     }
 
     while (true) {
-        stat = eeprom_read(bytes, 0x0000, 16);
-        for (uint8_t i = 0; i < 16; i++) printf("%c", bytes[i]);
+        stat = eeprom_read(bytes, 0x0000, 32);
+        for (uint8_t i = 0; i < 32; i++) printf("%c", bytes[i]);
         printf("\n");
         gpio_put(LED_PIN, LED_ON);
         sleep_ms(500);
