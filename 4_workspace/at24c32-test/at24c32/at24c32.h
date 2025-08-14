@@ -2,6 +2,7 @@
 #include <stdbool.h>
 
 #define AT24C32_ADDR 0x50
+#define EEPROM_PAGE_SIZE 0x0020
 
 /*! \brief Escribe bytes en la eeprom
  *  \ingroup at24c32

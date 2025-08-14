@@ -5,12 +5,17 @@ uint8_t eeprom_write(uint8_t *data, uint16_t address, uint8_t bytes)
     uint8_t len = bytes + 2;
     // Frame = Address + Data
     uint8_t frame[len];
+    uint8_t offset;
     static uint8_t stat;
     static int resp;
-    stat = 0;
+
     
-    // Chequeo que no voy a querer escribir mas que 32 bytes (eeprom page)
-    if (bytes <= 32){
+    stat = 0;
+    // Calculo address
+    offset = address % EEPROM_PAGE_SIZE;
+    //address = page*EEPROM_PAGE_SIZE + offset;
+    // Chequeo que no me desbordo del limite de pagina
+    if ((bytes + offset) <= 32){
         // Desempaqueto la direccion de memoria a la que escribir
         frame[0] = (uint8_t)((address >> 8) & 0x00FF);
         frame[1] = (uint8_t)(address & 0x00FF);

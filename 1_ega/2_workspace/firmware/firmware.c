@@ -36,8 +36,8 @@
 #define LCD_ADDR        0x27
 #define MENU_SIZE       5
 #define EEPROM_QUEUE_SIZE   1
-#define EEPROM_DATA_BASE    0x0020
-#define EEPROM_DATA_SIZE    0x0010
+#define EEPROM_DATA_BASE    0x20
+#define EEPROM_DATA_SIZE    0x10
 
 #define PULS_RISE       1
 #define ENC_A_RISE      2
@@ -475,12 +475,18 @@ void task_Setear(void *params)
     uint8_t show_menu;
 
     // Valores de prueba de menu y encoder
-    // settings.lux = menu[0].valor;
-    // settings.user_max = menu[1].valor;
-    // settings.user_min = menu[2].valor;
-    // settings.curva = (uint8_t) menu[3].valor;
-    // // Cargo buffer de prueba
-    // settings2bytes(&settings, buffer);
+    //settings.lux = menu[0].valor;
+    //settings.user_max = menu[1].valor;
+    //settings.user_min = menu[2].valor;
+    //settings.curva = (uint8_t) menu[3].valor;
+    // Cargo buffer de prueba
+    //settings2bytes(&settings, buffer);
+    // Cargo valores iniciales en eeprom (prueba)
+    uint16_t num_registro = 0;
+    uint16_t address = 0;
+    //vTaskSuspendAll();
+    //eeprom_write(buffer, 0, 16);
+    //xTaskResumeAll();
 
     while(1){
         // Si toco el pulsador entro en el menu de configuracion
@@ -488,23 +494,36 @@ void task_Setear(void *params)
         if(rx == pdPASS && opc == 'P'){
             // ENTRO EN CONFIGURACION
             
-            // Suspendo task_Control
+            // Suspendo tareas
             vTaskSuspend(tControl);
+            vTaskSuspend(tBH1750);
             // Levanto la config actual de la eeprom
-            ecmd = ECTRL_READ_SETTINGS;
-            xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
+            //ecmd = ECTRL_READ_SETTINGS;
+            //xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
             // Cambio de contexto para leer
-            taskYIELD();
+            //taskYIELD();
             // settings <- EEPROM
-            xQueueReceive(qEread, &buffer, portMAX_DELAY);
+            //xQueueReceive(qEread, &buffer, portMAX_DELAY);
+            ////// PRUEBA DE EEPROM
+            //vTaskSuspendAll();
+            eeprom_read(buffer, address, 16);
+            //xTaskResumeAll();
+            //for(uint8_t i=0; i<16; i++) printf("%x ", buffer[i]);
+            //printf("\n");
+            // Desempaqueto
             bytes2settings(&settings, buffer);
+            // Imprimo lectura
+            printf("%d: (%02d/%02d %02d:%02d:%02d) Lux: %d, Max: %d, Min: %d, Curva: %d\n",
+                            settings.index, settings.time.day, settings.time.month,
+                            settings.time.hour, settings.time.min,
+                            settings.time.sec, settings.lux, settings.user_max,
+                            settings.user_min, settings.curva);
             // Cargo settings actuales al menu
             menu[0].valor = settings.lux;
             menu[1].valor = settings.user_max;
             menu[2].valor = settings.user_min;
             menu[3].valor = (uint16_t) settings.curva;
             menu[4].valor = 0; // No hago calibracion salvo que especifique
-            num_log = settings.index;
         
             // limpio variable
             opc = 0;
@@ -613,16 +632,26 @@ void task_Setear(void *params)
             settings.user_max = menu[1].valor;
             settings.user_min = menu[2].valor;
             settings.curva = (uint8_t) menu[3].valor;
-            // settings -> EEPROM
+
+            num_registro++;
+            settings.index = num_registro;
+            address = num_registro*EEPROM_DATA_SIZE;
+            // Empaqueto settings
             settings2bytes(&settings, buffer);
-            xQueueSend(qEwrite, &buffer, portMAX_DELAY);
-            ecmd = ECTRL_WRITE_SETTINGS;
-            xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
-            taskYIELD();
+            // settings -> EEPROM
+            //xQueueSend(qEwrite, &buffer, portMAX_DELAY);
+            //ecmd = ECTRL_WRITE_SETTINGS;
+            //xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
+            //taskYIELD();
+            ///// PRUEBA DE EEPROM
+            //vTaskSuspendAll();
+            eeprom_write(buffer, address, 16);
+            //xTaskResumeAll();
             // Doy la orden a task_Control para que refresque los datos
             //xSemaphoreGive(sRefresh);
             // Saco de la suspension a task_Control
             vTaskResume(tControl);
+            vTaskResume(tBH1750);
         }
     }   
 }
@@ -812,8 +841,8 @@ int main()
     gpio_set_function(I2C1_SDA_PIN, GPIO_FUNC_I2C);
     gpio_set_function(I2C1_SCL_PIN, GPIO_FUNC_I2C);
     // Pongo pullups a 3V3
-    gpio_pull_up(I2C1_SDA_PIN);
-    gpio_pull_up(I2C1_SCL_PIN);
+    //gpio_pull_up(I2C1_SDA_PIN);
+    //gpio_pull_up(I2C1_SCL_PIN);
 
     // Inicializo LCD
     lcd_init(i2c1, LCD_ADDR);
@@ -837,14 +866,14 @@ int main()
     uint8_t data[16];
     settings_t settings;
     settings.index = 1;
-    settings.lux = 10;
-    settings.user_max = 99;
-    settings.user_min = 1;
-    settings.curva = 0;
+    settings.lux = 1111;
+    settings.user_max = 2222;
+    settings.user_min = 3333;
+    settings.curva = 44;
     settings.time = init;
     settings2bytes(&settings, data);
     //uint16_t eeprom_address = 0x0010;
-    eeprom_write(data, EEPROM_DATA_BASE, 16);
+    eeprom_write(data, 0, 16);
 
     // Init LED RUN
     gpio_init(LED_RUN_PIN);

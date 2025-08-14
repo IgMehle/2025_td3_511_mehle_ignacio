@@ -1,6 +1,7 @@
 #include "hardware/i2c.h"
 
 #define AT24C32_ADDR 0x50
+#define EEPROM_PAGE_SIZE 0x20
 
 /*! \brief Escribe bytes en la eeprom
  *  \ingroup at24c32
