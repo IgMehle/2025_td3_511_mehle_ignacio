@@ -863,7 +863,7 @@ int main()
     lcd_clear();
 
     // Inicializo BH1750
-    bh1750_init();
+    bh1750_init(BH1750_HIRES);
 
     // Inicializo DS3231
     rtc_t init;
