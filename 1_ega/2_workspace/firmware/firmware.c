@@ -325,12 +325,11 @@ void task_LCD(void *pvParams)
 void task_EEPROM(void *pvParams)
 {
     eeprom_cmd_t comando;
-    //settings_t settings;
-    uint8_t settings[16];
+    settings_t settings;
+    uint8_t bf[16];
     //calibration_t calib;
     uint8_t calib[16];
     eepromDumpRequest_t dump_q;
-    // uint8_t bf[16];
     //uint8_t bf_calib[16];
     uint16_t address = 0x0000;
     uint16_t index = 0;
@@ -350,12 +349,12 @@ void task_EEPROM(void *pvParams)
                     // Calculo address
                     address = index*EEPROM_DATA_SIZE + EEPROM_DATA_BASE;
                     // Desempaqueto
-                    //settings2bytes(&settings, bf);
+                    settings2bytes(&settings, bf);
                     // Intento tomar el bus
                     if(xSemaphoreTake(mI2C, portMAX_DELAY) == pdPASS){
                         // Escribo settings en la eeprom
-                        //eeprom_write(bf, address, EEPROM_DATA_SIZE);
-                        eeprom_write(settings, address, EEPROM_DATA_SIZE);
+                        eeprom_write(bf, address, EEPROM_DATA_SIZE);
+                        //eeprom_write(settings, address, EEPROM_DATA_SIZE);
                         xSemaphoreGive(mI2C);
                     }
                 }   
@@ -367,12 +366,12 @@ void task_EEPROM(void *pvParams)
                 // Intento tomar el bus
                 if(xSemaphoreTake(mI2C, portMAX_DELAY) == pdPASS){
                     // Leo el ultimo registro de la eeprom
-                    //eeprom_read(bf, address, 16);
-                    eeprom_read(settings, address, 16);
+                    eeprom_read(bf, address, 16);
+                    // eeprom_read(settings, address, 16);
                     xSemaphoreGive(mI2C);
                 }
                 // Empaqueto
-                //bytes2settings(&settings, bf);
+                bytes2settings(&settings, bf);
                 // Mando a la cola de lectura
                 xQueueSend(qEread, &settings, portMAX_DELAY);
                 break;
@@ -412,9 +411,9 @@ void task_EEPROM(void *pvParams)
                 end = index * EEPROM_DATA_SIZE;
                 while (offset < end) {
                     // leo datos y encolo
-                    //eeprom_read(bf, offset, 16);
-                    eeprom_read(settings, offset, 16);
-                    //bytes2settings(&settings, bf);
+                    eeprom_read(bf, offset, 16);
+                    //eeprom_read(&settings, offset, 16);
+                    bytes2settings(&settings, bf);
                     if(xQueueSend(dump_q.responseQueue, &settings, portMAX_DELAY)==pdPASS){
                         offset += EEPROM_DATA_SIZE;
                     }
@@ -425,13 +424,13 @@ void task_EEPROM(void *pvParams)
             case ECTRL_CLEAR:
                 //////////////////////////////////////////////////////////////////////
                 // EEPROM default erased value
-                memset(settings, 0xFF, sizeof(settings)); 
+                memset(bf, 0xFF, sizeof(bf)); 
                 // apunto al inicio de los settings
                 offset = EEPROM_DATA_BASE;
                 // apunto al final de los settings
                 end = index * EEPROM_DATA_SIZE;
                 while (offset < index) {
-                    eeprom_write(settings, offset, 16);
+                    eeprom_write(bf, offset, 16);
                     offset += EEPROM_DATA_SIZE;
                 }
                 index = 0;
@@ -505,7 +504,8 @@ void task_Setear(void *params)
             // Cambio de contexto para leer
             taskYIELD();
             // settings <- EEPROM
-            xQueueReceive(qEread, &buffer, portMAX_DELAY);
+            //xQueueReceive(qEread, buffer, portMAX_DELAY);
+            xQueueReceive(qEread, &settings, portMAX_DELAY);
             ////// PRUEBA DE EEPROM
             //vTaskSuspendAll();
             //eeprom_read(buffer, address, 16);
@@ -513,7 +513,7 @@ void task_Setear(void *params)
             //for(uint8_t i=0; i<16; i++) printf("%x ", buffer[i]);
             //printf("\n");
             // Desempaqueto
-            bytes2settings(&settings, buffer);
+            //bytes2settings(&settings, buffer);
             // Imprimo lectura
             printf("%d: (%02d/%02d %02d:%02d:%02d) Lux: %d, Max: %d, Min: %d, Curva: %d\n",
                             settings.index, settings.time.day, settings.time.month,
@@ -643,9 +643,10 @@ void task_Setear(void *params)
 
             //address = num_registro*EEPROM_DATA_SIZE;
             // Empaqueto settings
-            settings2bytes(&settings, buffer);
+            //settings2bytes(&settings, buffer);
             // settings -> EEPROM
-            xQueueSend(qEwrite, &buffer, portMAX_DELAY);
+            //xQueueSend(qEwrite, buffer, portMAX_DELAY);
+            xQueueSend(qEwrite, &settings, portMAX_DELAY);
             ecmd = ECTRL_WRITE_SETTINGS;
             xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
             taskYIELD();
