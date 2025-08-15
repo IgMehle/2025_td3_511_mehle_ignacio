@@ -36,7 +36,7 @@
 #define LCD_ADDR        0x27
 #define MENU_SIZE       5
 #define EEPROM_QUEUE_SIZE   1
-#define EEPROM_DATA_BASE    0x20
+#define EEPROM_DATA_BASE    0x00
 #define EEPROM_DATA_SIZE    0x10
 
 #define PULS_RISE       1
@@ -68,14 +68,14 @@ SemaphoreHandle_t mI2C;
 SemaphoreHandle_t sRTC, sRefresh, sCalib, sEfull, sEempty;
 
 // ITEM DE QUEUE LCD
-typedef struct {
+typedef struct lcd {
     char text[17];
     uint8_t line;
     uint8_t clear;
 } qLCD_t;
 
 // ESTRUCTURA BASE DE SETTINGS
-typedef struct {
+typedef struct settings {
     uint16_t index; // 2B
     uint16_t lux; // 2B
     uint16_t user_max; // 2B
@@ -91,14 +91,14 @@ typedef struct {
 // } settings_buffer_t;
 
 // ESTRUCTURA DE MENU
-typedef struct {
+typedef struct menu {
     const char* texto;
     uint16_t valor;
     uint16_t min;
     uint16_t max;
 } menu_t;
 
-typedef enum {
+typedef enum ecmd {
     ECTRL_WRITE_SETTINGS,
     ECTRL_READ_SETTINGS,
     ECTRL_WRITE_CALIB,
@@ -108,7 +108,7 @@ typedef enum {
 } eeprom_cmd_t;
 
 // ESTRUCTURA DE PARAMETROS CALIBRACION
-typedef struct {
+typedef struct calib {
     float kp;
     float ki;
     float kd;
@@ -117,7 +117,7 @@ typedef struct {
 } calibration_t;
 
 // Estructura para dump request
-typedef struct {
+typedef struct dumpreq {
     QueueHandle_t responseQueue;
     // uint16_t start_address;
     uint16_t length;
@@ -345,6 +345,8 @@ void task_EEPROM(void *pvParams)
             case ECTRL_WRITE_SETTINGS:
                 // Intento leer de la queue de escritura
                 if(xQueueReceive(qEwrite, &settings, portMAX_DELAY) == pdPASS){
+                    // Incremento index para agregar un nuevo registro
+                    index++;
                     // Calculo address
                     address = index*EEPROM_DATA_SIZE + EEPROM_DATA_BASE;
                     // Desempaqueto
@@ -498,15 +500,15 @@ void task_Setear(void *params)
             vTaskSuspend(tControl);
             vTaskSuspend(tBH1750);
             // Levanto la config actual de la eeprom
-            //ecmd = ECTRL_READ_SETTINGS;
-            //xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
+            ecmd = ECTRL_READ_SETTINGS;
+            xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
             // Cambio de contexto para leer
-            //taskYIELD();
+            taskYIELD();
             // settings <- EEPROM
-            //xQueueReceive(qEread, &buffer, portMAX_DELAY);
+            xQueueReceive(qEread, &buffer, portMAX_DELAY);
             ////// PRUEBA DE EEPROM
             //vTaskSuspendAll();
-            eeprom_read(buffer, address, 16);
+            //eeprom_read(buffer, address, 16);
             //xTaskResumeAll();
             //for(uint8_t i=0; i<16; i++) printf("%x ", buffer[i]);
             //printf("\n");
@@ -519,6 +521,7 @@ void task_Setear(void *params)
                             settings.time.sec, settings.lux, settings.user_max,
                             settings.user_min, settings.curva);
             // Cargo settings actuales al menu
+            num_registro = settings.index;
             menu[0].valor = settings.lux;
             menu[1].valor = settings.user_max;
             menu[2].valor = settings.user_min;
@@ -624,29 +627,35 @@ void task_Setear(void *params)
             lcd.clear = 0;
             xQueueSend(qLCD, &lcd, portMAX_DELAY);
             taskYIELD();
-            // DELAY 1SEG
-            vTaskDelay(pdMS_TO_TICKS(1000));
+            // LCD CLEAR
+            //sprintf(lcd.text, "");
+            //lcd.line = 0;
+            //lcd.clear = 1;
+            //xQueueSend(qLCD, &lcd, portMAX_DELAY);
             
             // cargo menu actualizado a settings
+            num_registro++;
+            settings.index = num_registro;
             settings.lux = menu[0].valor;
             settings.user_max = menu[1].valor;
             settings.user_min = menu[2].valor;
             settings.curva = (uint8_t) menu[3].valor;
 
-            num_registro++;
-            settings.index = num_registro;
-            address = num_registro*EEPROM_DATA_SIZE;
+            //address = num_registro*EEPROM_DATA_SIZE;
             // Empaqueto settings
             settings2bytes(&settings, buffer);
             // settings -> EEPROM
-            //xQueueSend(qEwrite, &buffer, portMAX_DELAY);
-            //ecmd = ECTRL_WRITE_SETTINGS;
-            //xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
-            //taskYIELD();
+            xQueueSend(qEwrite, &buffer, portMAX_DELAY);
+            ecmd = ECTRL_WRITE_SETTINGS;
+            xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
+            taskYIELD();
             ///// PRUEBA DE EEPROM
             //vTaskSuspendAll();
-            eeprom_write(buffer, address, 16);
+            //eeprom_write(buffer, address, 16);
             //xTaskResumeAll();
+
+            // DELAY 1SEG
+            vTaskDelay(pdMS_TO_TICKS(1000));
             // Doy la orden a task_Control para que refresque los datos
             //xSemaphoreGive(sRefresh);
             // Saco de la suspension a task_Control
@@ -697,6 +706,7 @@ void task_Control(void *pvParams)
     float duty;
     qLCD_t lcd;
     rtc_t time;
+    uint8_t prev_sec;
     uint8_t bf[7];
 
     while(1){
@@ -724,25 +734,29 @@ void task_Control(void *pvParams)
             xQueueSend(qPWM, &duty, portMAX_DELAY);
 
             // Armo el texto para el LCD
-            sprintf(lcd.text, "LUX: %d", lux);
+            sprintf(lcd.text, "LUX: %5d", lux);
             lcd.line = 0;
-            lcd.clear = 1;
+            lcd.clear = 0;
             // Envio a la cola del lcd
             xQueueSend(qLCD, &lcd, portMAX_DELAY);
             // Fuerzo cambio de contexto
             taskYIELD();
 
+            // Guardo ultima lectura de segundos
+            prev_sec = time.sec;
             // Leo la hora en el rtc
             xSemaphoreGive(sRTC);
             taskYIELD();
             xQueueReceive(qRTC, &time, portMAX_DELAY);
-            // muestro la ultima hora
-            sprintf(lcd.text, "%02d/%02d %02d:%02d:%02d", time.day, time.month, 
+            // muestro la ultima hora si time.sec cambio
+            if(time.sec != prev_sec){
+                sprintf(lcd.text, "%02d/%02d %02d:%02d:%02d", time.day, time.month, 
                                 time.hour, time.min, time.sec);
-            lcd.line = 1;
-            lcd.clear = 0;
-            // Escribo hora en el LCD
-            xQueueSend(qLCD, &lcd, portMAX_DELAY);
+                lcd.line = 1;
+                lcd.clear = 0;
+                // Escribo hora en el LCD
+                xQueueSend(qLCD, &lcd, portMAX_DELAY);
+            } 
         }
     }
 }
@@ -865,15 +879,14 @@ int main()
     // Escribo EEPROM
     uint8_t data[16];
     settings_t settings;
-    settings.index = 1;
-    settings.lux = 1111;
-    settings.user_max = 2222;
-    settings.user_min = 3333;
-    settings.curva = 44;
+    settings.index = 0;
+    settings.lux = 1000;
+    settings.user_max = 2000;
+    settings.user_min = 100;
+    settings.curva = 0;
     settings.time = init;
     settings2bytes(&settings, data);
-    //uint16_t eeprom_address = 0x0010;
-    eeprom_write(data, 0, 16);
+    eeprom_write(data, EEPROM_DATA_BASE, 16);
 
     // Init LED RUN
     gpio_init(LED_RUN_PIN);
