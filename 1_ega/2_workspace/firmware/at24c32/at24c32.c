@@ -1,5 +1,17 @@
 #include "at24c32.h"
 
+uint8_t eeprom_wait_ready() {
+    uint8_t dummy = 0;
+    for (int i = 0; i < 100; i++) {   // hasta ~10 ms
+        int resp = i2c_write_blocking(i2c1, AT24C32_ADDR, &dummy, 0, false);
+        if (resp >= 0) {
+            return 1; // ACK recibido → ya está lista
+        }
+        sleep_us(100); // esperar 0.1 ms antes de reintentar
+    }
+    return 0; // timeout → error
+}
+
 uint8_t eeprom_write(uint8_t *data, uint16_t address, uint8_t bytes)
 {
     uint8_t len = bytes + 2;
@@ -11,9 +23,9 @@ uint8_t eeprom_write(uint8_t *data, uint16_t address, uint8_t bytes)
     status = 1;
     
     // Chequeo que no voy a querer escribir mas que 32 bytes (eeprom page)
-    //offset = address % EEPROM_PAGE_SIZE;
+    offset = address % EEPROM_PAGE_SIZE;
     // if ((bytes+offset) <= 32){
-    if ((bytes) <= 32){
+    if ((bytes + offset) <= 32){
         // Desempaqueto la direccion de memoria a la que escribir
         frame[0] = (uint8_t)((address >> 8) & 0x00FF);
         frame[1] = (uint8_t)(address & 0x00FF);
@@ -21,9 +33,9 @@ uint8_t eeprom_write(uint8_t *data, uint16_t address, uint8_t bytes)
         for(uint8_t i = 0; i<bytes; i++) frame[i+2] = data[i];
         // Envio bytes a escribir
         resp = i2c_write_blocking(i2c1, AT24C32_ADDR, frame, len, false);
-        // Tiempo de escritura en eeprom PROBAR
-        //sleep_ms(10);
         if (resp != len) status = 0;
+        // Tiempo de escritura en eeprom PROBAR
+        // sleep_ms(10);
     }
     else status = 0;
     return status;

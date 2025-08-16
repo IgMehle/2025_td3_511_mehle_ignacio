@@ -1,5 +1,5 @@
 #include <stdio.h>
-#include <string.h>
+//#include <string.h>
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
 #include "hardware/pwm.h"
@@ -36,8 +36,10 @@
 #define LCD_ADDR        0x27
 #define MENU_SIZE       5
 #define EEPROM_QUEUE_SIZE   1
-#define EEPROM_DATA_BASE    0x00
+#define EEPROM_DATA_BASE    0x40
 #define EEPROM_DATA_SIZE    0x10
+
+#define DUMP_SIZE       15
 
 #define PULS_RISE       1
 #define ENC_A_RISE      2
@@ -104,7 +106,7 @@ typedef enum ecmd {
     ECTRL_WRITE_CALIB,
     ECTRL_READ_CALIB,
     ECTRL_DUMP,
-    ECTRL_CLEAR
+    ECTRL_ERASE
 } eeprom_cmd_t;
 
 // ESTRUCTURA DE PARAMETROS CALIBRACION
@@ -334,8 +336,22 @@ void task_EEPROM(void *pvParams)
     uint16_t address = 0x0000;
     uint16_t index = 0;
     // DUMP Y CLEAR
-    uint16_t offset;
+    uint16_t ptr;
     uint16_t end;
+
+    // LEVANTO EL NUMERO DE REGISTROS ESCRITOS EN EEPROM
+    taskENTER_CRITICAL();
+    for(uint8_t i=0; i<255; i++){
+        address = i*EEPROM_DATA_SIZE + EEPROM_DATA_BASE;
+        eeprom_read(bf, address, 16);
+        bytes2settings(&settings, bf);
+        if (settings.index == 0xFFFF)
+        {
+            index = (uint16_t)(i-1);
+            break;
+        }
+    }
+    taskEXIT_CRITICAL();
 
     while(1){
         if(xQueueReceive(qEcontrol, &comando, portMAX_DELAY) == pdPASS){
@@ -346,6 +362,7 @@ void task_EEPROM(void *pvParams)
                 if(xQueueReceive(qEwrite, &settings, portMAX_DELAY) == pdPASS){
                     // Incremento index para agregar un nuevo registro
                     index++;
+                    printf("\nRegistro N: %d\n", index);
                     // Calculo address
                     address = index*EEPROM_DATA_SIZE + EEPROM_DATA_BASE;
                     // Desempaqueto
@@ -354,6 +371,8 @@ void task_EEPROM(void *pvParams)
                     if(xSemaphoreTake(mI2C, portMAX_DELAY) == pdPASS){
                         // Escribo settings en la eeprom
                         eeprom_write(bf, address, EEPROM_DATA_SIZE);
+                        // delay de escritura de eeprom
+                        vTaskDelay(pdMS_TO_TICKS(5));
                         //eeprom_write(settings, address, EEPROM_DATA_SIZE);
                         xSemaphoreGive(mI2C);
                     }
@@ -383,6 +402,8 @@ void task_EEPROM(void *pvParams)
                     if(xSemaphoreTake(mI2C, portMAX_DELAY) == pdPASS){
                         // Escribo parametros de calibracion en la eeprom
                         eeprom_write(calib, 0x0000, 16);
+                        // delay de escritura de eeprom
+                        vTaskDelay(pdMS_TO_TICKS(5));
                         xSemaphoreGive(mI2C);
                     }
                 }  
@@ -403,35 +424,40 @@ void task_EEPROM(void *pvParams)
                 ////////////////////////////////////////////////////////
                 // Paso el numero de items en memoria
                 dump_q.length = index;
+                //dump_q.length = DUMP_SIZE;
                 // creo cola de volcado
                 dump_q.responseQueue = xQueueCreate(index, 16U);
+                //dump_q.responseQueue = xQueueCreate(DUMP_SIZE, 16U);
                 // apunto al inicio de los settings
-                offset = EEPROM_DATA_BASE;
+                ptr = EEPROM_DATA_BASE;
                 // apunto al final de los settings
-                end = index * EEPROM_DATA_SIZE;
-                while (offset < end) {
+                end = (index) * EEPROM_DATA_SIZE + EEPROM_DATA_BASE;
+                //end = DUMP_SIZE * EEPROM_DATA_SIZE + EEPROM_DATA_BASE;
+                while (ptr < end) {
                     // leo datos y encolo
-                    eeprom_read(bf, offset, 16);
-                    //eeprom_read(&settings, offset, 16);
+                    eeprom_read(bf, ptr, 16);
                     bytes2settings(&settings, bf);
                     if(xQueueSend(dump_q.responseQueue, &settings, portMAX_DELAY)==pdPASS){
-                        offset += EEPROM_DATA_SIZE;
+                        ptr += EEPROM_DATA_SIZE;
                     }
                 }
                 xQueueSend(qEdump, &dump_q, portMAX_DELAY);
                 ////////////////////////////////////////////////////////
                 break;
-            case ECTRL_CLEAR:
+            case ECTRL_ERASE:
                 //////////////////////////////////////////////////////////////////////
                 // EEPROM default erased value
-                memset(bf, 0xFF, sizeof(bf)); 
-                // apunto al inicio de los settings
-                offset = EEPROM_DATA_BASE;
+                for(uint8_t j=0; j<EEPROM_DATA_SIZE; j++) bf[j] = 0xFF;
+                // apunto al inicio de los settings menos el primero
+                ptr = EEPROM_DATA_BASE + EEPROM_DATA_SIZE;
                 // apunto al final de los settings
-                end = index * EEPROM_DATA_SIZE;
-                while (offset < index) {
-                    eeprom_write(bf, offset, 16);
-                    offset += EEPROM_DATA_SIZE;
+                end = index * EEPROM_DATA_SIZE + ptr;
+                //end = DUMP_SIZE * EEPROM_DATA_SIZE + EEPROM_DATA_BASE;
+                while (ptr < end) {
+                    eeprom_write(bf, ptr, 16);
+                    // delay de escritura de eeprom
+                    vTaskDelay(pdMS_TO_TICKS(10));
+                    ptr += EEPROM_DATA_SIZE;
                 }
                 index = 0;
                 xSemaphoreGive(sEempty);
@@ -515,7 +541,7 @@ void task_Setear(void *params)
             // Desempaqueto
             //bytes2settings(&settings, buffer);
             // Imprimo lectura
-            printf("%d: (%02d/%02d %02d:%02d:%02d) Lux: %d, Max: %d, Min: %d, Curva: %d\n",
+            printf("\n%d: (%02d/%02d %02d:%02d:%02d) Lux: %d, Max: %d, Min: %d, Curva: %d",
                             settings.index, settings.time.day, settings.time.month,
                             settings.time.hour, settings.time.min,
                             settings.time.sec, settings.lux, settings.user_max,
@@ -772,57 +798,88 @@ void task_LedRun(void *pvParams)
     }
 }
 
-void task_Consola(void *params) {
-    char cmd[32];
+void task_Consola(void *pvParameters) {
+    // buffer de almacenamiento de caracteres
+    char buffer[8];
+    int idx = 0;
+    // Comando de eeprom
     eeprom_cmd_t ecmd;
+    // Estructuras para manejo de dump
     eepromDumpRequest_t dump;
     settings_t settings;
 
-    while(1) {
-        printf("\r\033[KComando (dump / clear / exit): ");
-        fflush(stdout);
+    // Mensaje inicial
+    printf("Ingresar 'd' para dump de registros, 'c' para borrar memoria: \r\n");
+    fflush(stdout);
+    vTaskDelay(pdMS_TO_TICKS(1));
 
-        // Leer comando por consola
-        if (scanf("%31s", cmd) == 1) {     
-            if (strcmp(cmd, "dump") == 0) {
+    while (true) {
+        // Bloquea hasta que se ingrese un carácter por USB
+        int ch = getchar_timeout_us(500000);
+
+        if (ch == PICO_ERROR_TIMEOUT) {
+            // No se ingresó nada → ceder CPU
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+
+        if (ch == '\r' || ch == '\n') {
+            // Fin de línea: procesar lo que hay en el buffer
+            buffer[idx] = '\0';
+            idx = 0; // reinicio índice para próxima entrada
+
+            //printf("Comando recibido: %s\r\n", buffer);
+            //fflush(stdout);
+            //vTaskDelay(pdMS_TO_TICKS(1));
+
+            if (buffer[0] == 'd') {
                 ecmd = ECTRL_DUMP;
                 xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
                 taskYIELD();
                 // Recibir datos y mostrarlos
                 xQueueReceive(qEdump, &dump, portMAX_DELAY);
-                // Puedo hacer un while o un for con la cantidad de items en dump.lenght
-                while(xQueueReceive(dump.responseQueue, &settings, portMAX_DELAY) == pdPASS){
-                    // Mientras pueda recibir de la cola, imprimo el registro
-                    printf("%d: (%02d/%02d %02d:%02d:%02d) Lux: %d, Max: %d, Min: %d, Curva: %d/n",
+                // for (cantidad de items en dump.lenght)
+                for (uint16_t i = 0; i < dump.length; i++){
+                    // Recibo de cola response con un timeout
+                    if(xQueueReceive(dump.responseQueue, &settings, pdMS_TO_TICKS(100)) == pdPASS){
+                        // Mientras pueda recibir de la cola, imprimo el registro
+                        printf("%d: (%02d/%02d %02d:%02d:%02d) Lux: %d, Max: %d, Min: %d, Curva: %d\n",
                             settings.index, settings.time.day, settings.time.month,
-                            settings.time.year, settings.time.hour, settings.time.min,
+                            settings.time.hour, settings.time.min,
                             settings.time.sec, settings.lux, settings.user_max,
                             settings.user_min, settings.curva);
+                        fflush(stdout);
+                        vTaskDelay(pdMS_TO_TICKS(100));
+                    }
+                    // Si no hay mas registros, salgo
+                    else break;
                 }
                 // Borro cola para limpiar RAM
-                vQueueDelete(dump.responseQueue);
-            }
-
-            else if (strcmp(cmd, "clear") == 0) {
-                ecmd = ECTRL_CLEAR;
+                vQueueDelete(dump.responseQueue);   
+            } 
+            else if (buffer[0] == 'c') {
+                ecmd = ECTRL_ERASE;
                 xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
                 taskYIELD();
                 // Esperar confirmación
                 if(xSemaphoreTake(sEempty, portMAX_DELAY) == pdPASS){
-                    printf("Borrado completado.\n");
+                    printf("Borrado completado.\r\n");
+                    fflush(stdout);
+                    vTaskDelay(pdMS_TO_TICKS(1));
                 }
             }
 
-            else if (strcmp(cmd, "exit") == 0) {
-                printf("Saliendo...\n");
-                vTaskDelete(NULL);
-            }
+            // Mostrar instrucciones nuevamente
+            printf("Ingresar 'd' para dump de registros, 'c' para borrar memoria: \r\n");
+            fflush(stdout);
+            vTaskDelay(pdMS_TO_TICKS(1));
 
-            else {
-                printf("Comando no reconocido.\n");
+        } else if (ch != EOF) {
+            // Acumular en el buffer si no es fin de línea
+            if (idx < (int)(sizeof(buffer) - 1)) {
+                buffer[idx++] = (char)ch;
             }
         }
-        //vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
@@ -945,8 +1002,8 @@ int main()
     // Creo queue de comando de eeprom
     qEcontrol = xQueueCreate(1, sizeof(uint8_t));
     // Creo queues de datos de eeprom
-    //qEwrite = xQueueCreate(1, sizeof(settings_t));
-    qEwrite = xQueueCreate(1, 16U);
+    qEwrite = xQueueCreate(1, sizeof(settings_t));
+    //qEwrite = xQueueCreate(1, 16U);
     //qEwritecalib = xQueueCreate(1, sizeof(calibration_t));
     qEwritecalib = xQueueCreate(1, 16U);
     qEread = xQueueCreate(1, 16U);
@@ -959,9 +1016,9 @@ int main()
     xTaskCreate(task_BH1750, "BH1750", 128, NULL, 2, &tBH1750);
     xTaskCreate(task_PWM, "PWM", 128, NULL, 2, NULL);
     xTaskCreate(task_Setear, "Setear", 512, NULL, 2, NULL);
-    xTaskCreate(task_LedRun, "Run", 128, NULL, 2, NULL);
+    xTaskCreate(task_LedRun, "Run", 128, NULL, 3, NULL);
     //xTaskCreate(task_Calibracion, "Calibracion", 256, NULL, 3, NULL);
-    //xTaskCreate(task_Consola, "Consola", 2048, NULL, 3, NULL);
+    xTaskCreate(task_Consola, "Consola", 1024, NULL, 2, NULL);
     xTaskCreate(task_LCD, "LCD", 128, NULL, 4, NULL);
     xTaskCreate(task_RTC, "RTC", 128, NULL, 4, NULL);
     xTaskCreate(task_EEPROM, "EEPROM", 1024, NULL, 4, NULL);
