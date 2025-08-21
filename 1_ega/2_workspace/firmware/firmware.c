@@ -1,5 +1,5 @@
 #include <stdio.h>
-//#include <string.h>
+#include <string.h>
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
 #include "hardware/pwm.h"
@@ -31,12 +31,14 @@
 #define AL_HI_PIN       21
 #define BUZZER_PIN      12
 // CONSTANTES
+#define LUX_TIME        20
+
 #define DEBOUNCE_TIME   20
 #define I2C1_FREQ       100000
 #define LCD_ADDR        0x27
 #define MENU_SIZE       5
 #define EEPROM_QUEUE_SIZE   1
-#define EEPROM_DATA_BASE    0x40
+#define EEPROM_DATA_BASE    0x20
 #define EEPROM_DATA_SIZE    0x10
 
 #define DUMP_SIZE       15
@@ -57,7 +59,7 @@
 #define ALARMA_HI_OFF   gpio_put(AL_HI_PIN, true)
 
 // Handles de tareas
-TaskHandle_t tControl, tBH1750;
+TaskHandle_t tControl, tLuxo, tPWM, tSetear;
 // Queues de datos inter tarea
 QueueHandle_t qIRQ, qCTRL, qPWM, qLUX, qLCD, qRTC;
 // Queues de manejo de eeprom
@@ -68,6 +70,8 @@ QueueHandle_t qEwrite, qEwritecalib, qEread, qEreadcalib, qEdump;
 SemaphoreHandle_t mI2C;
 // Semaforos de control
 SemaphoreHandle_t sRTC, sRefresh, sCalib, sEfull, sEempty;
+// Semaforos counting
+SemaphoreHandle_t sLux_show;
 
 // ITEM DE QUEUE LCD
 typedef struct lcd {
@@ -124,6 +128,15 @@ typedef struct dumpreq {
     // uint16_t start_address;
     uint16_t length;
 } eepromDumpRequest_t;
+
+typedef struct lut {
+    float duty;
+    uint8_t lux;
+} lut_t;
+
+volatile uint8_t toggle = 0;
+volatile uint8_t toggle2 = 0;
+lut_t lut[101];
 
 void settings2bytes(settings_t *settings, uint8_t *bytes)
 {
@@ -243,20 +256,13 @@ void task_PWM(void *pvParams)
     float freq = 1000.0;
     float divider = clock_freq / (freq * 8192);
     float duty = 0.0;
+    float duty0 = 0.0;
+    float duty_f = 0.0;
+    float alpha = 0.2;
 
     while(1){
         if (xQueueReceive(qPWM, &duty, portMAX_DELAY) == pdPASS){
-            //Pongo el pin como pwm
-            gpio_set_function(PWM_OUT_PIN, GPIO_FUNC_PWM);
-            //Calculo con precision de 16 bits de la frec que se quiere--65536        
-            //divider = clock_freq / (freq * 8192);    
-            pwm_set_clkdiv(slice_num, divider);
-            //16 bit de resolucion para el conteo maximo del ciclo de PWM--65535
-            pwm_set_wrap(slice_num, 8191);                 
-            //Calcula el duty cycle--65536
-            pwm_set_gpio_level(PWM_OUT_PIN, duty * 8192);
-            // Habilitab el PWM en el pin            
-            pwm_set_enabled(slice_num, true);                
+                            
         }
     }
 }
@@ -274,29 +280,6 @@ void task_RTC(void *pvParams)
                 xQueueSend(qRTC, &time, portMAX_DELAY);
             }
         }
-    }
-}
-
-void task_BH1750(void *pvParams)
-{
-    uint16_t lux = 0;
-    while(1){
-        // Si puedo tomar el bus
-        if(xSemaphoreTake(mI2C, portMAX_DELAY) == pdPASS){
-            // Leo luxometro
-            lux = bh1750_read();
-            xSemaphoreGive(mI2C);
-            // Paso a la cola
-            xQueueOverwrite(qLUX, &lux);
-        }
-        //////////////////////////////////////
-        // Funcion de prueba
-        // lux = lux + 100;
-        // if(lux > 1000) lux = 0;
-        // xQueueOverwrite(qLUX, &lux);
-        //////////////////////////////////////
-        // Corre cada 150ms
-        vTaskDelay(pdMS_TO_TICKS(150));
     }
 }
 
@@ -329,8 +312,8 @@ void task_EEPROM(void *pvParams)
     eeprom_cmd_t comando;
     settings_t settings;
     uint8_t bf[16];
-    //calibration_t calib;
-    uint8_t calib[16];
+    calibration_t calib;
+    //uint8_t calib[16];
     eepromDumpRequest_t dump_q;
     //uint8_t bf_calib[16];
     uint16_t address = 0x0000;
@@ -347,7 +330,8 @@ void task_EEPROM(void *pvParams)
         bytes2settings(&settings, bf);
         if (settings.index == 0xFFFF)
         {
-            index = (uint16_t)(i-1);
+            if(i>0) index = (uint16_t)(i-1);
+            else index = 0;
             break;
         }
     }
@@ -401,7 +385,7 @@ void task_EEPROM(void *pvParams)
                     // Intento tomar el bus
                     if(xSemaphoreTake(mI2C, portMAX_DELAY) == pdPASS){
                         // Escribo parametros de calibracion en la eeprom
-                        eeprom_write(calib, 0x0000, 16);
+                        //eeprom_write(calib, 0x0000, 16);
                         // delay de escritura de eeprom
                         vTaskDelay(pdMS_TO_TICKS(5));
                         xSemaphoreGive(mI2C);
@@ -413,7 +397,7 @@ void task_EEPROM(void *pvParams)
                 // Intento tomar el bus
                 if(xSemaphoreTake(mI2C, portMAX_DELAY) == pdPASS){
                     // Leo parametros de calibracion de la eeprom
-                    eeprom_read(calib, 0x0000, 16);
+                    //eeprom_read(calib, 0x0000, 16);
                     xSemaphoreGive(mI2C);
                 }
                 // Mando a la cola de lectura de parametros del pid
@@ -422,17 +406,22 @@ void task_EEPROM(void *pvParams)
 
             case ECTRL_DUMP:
                 ////////////////////////////////////////////////////////
+                eeprom_read(bf, 0x0000, 16);
+                memcpy(&calib, bf, sizeof(calibration_t));
+                printf("\r\nKP= %f - KI= %f - KD= %f - LUXMAX= %d - luxmin= %d",
+                    calib.kp, calib.ki, calib.kd, calib.lux_max, calib.lux_min);
+                fflush(stdout);
                 // Paso el numero de items en memoria
-                dump_q.length = index;
-                //dump_q.length = DUMP_SIZE;
+                //dump_q.length = index;
+                dump_q.length = DUMP_SIZE;
                 // creo cola de volcado
-                dump_q.responseQueue = xQueueCreate(index, 16U);
-                //dump_q.responseQueue = xQueueCreate(DUMP_SIZE, 16U);
+                //dump_q.responseQueue = xQueueCreate(index, 16U);
+                dump_q.responseQueue = xQueueCreate(DUMP_SIZE, 16U);
                 // apunto al inicio de los settings
                 ptr = EEPROM_DATA_BASE;
                 // apunto al final de los settings
-                end = (index) * EEPROM_DATA_SIZE + EEPROM_DATA_BASE;
-                //end = DUMP_SIZE * EEPROM_DATA_SIZE + EEPROM_DATA_BASE;
+                //end = (index) * EEPROM_DATA_SIZE + EEPROM_DATA_BASE;
+                end = DUMP_SIZE * EEPROM_DATA_SIZE + EEPROM_DATA_BASE;
                 while (ptr < end) {
                     // leo datos y encolo
                     eeprom_read(bf, ptr, 16);
@@ -447,12 +436,12 @@ void task_EEPROM(void *pvParams)
             case ECTRL_ERASE:
                 //////////////////////////////////////////////////////////////////////
                 // EEPROM default erased value
-                for(uint8_t j=0; j<EEPROM_DATA_SIZE; j++) bf[j] = 0xFF;
+                memset(bf, 0xFF, sizeof(bf));
                 // apunto al inicio de los settings menos el primero
                 ptr = EEPROM_DATA_BASE + EEPROM_DATA_SIZE;
                 // apunto al final de los settings
-                end = index * EEPROM_DATA_SIZE + ptr;
-                //end = DUMP_SIZE * EEPROM_DATA_SIZE + EEPROM_DATA_BASE;
+                //end = index * EEPROM_DATA_SIZE + ptr;
+                end = DUMP_SIZE * EEPROM_DATA_SIZE + EEPROM_DATA_BASE;
                 while (ptr < end) {
                     eeprom_write(bf, ptr, 16);
                     // delay de escritura de eeprom
@@ -523,7 +512,7 @@ void task_Setear(void *params)
             
             // Suspendo tareas
             vTaskSuspend(tControl);
-            vTaskSuspend(tBH1750);
+            //vTaskSuspend(tLuxo);
             // Levanto la config actual de la eeprom
             ecmd = ECTRL_READ_SETTINGS;
             xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
@@ -684,10 +673,10 @@ void task_Setear(void *params)
             // DELAY 1SEG
             vTaskDelay(pdMS_TO_TICKS(1000));
             // Doy la orden a task_Control para que refresque los datos
-            //xSemaphoreGive(sRefresh);
+            xSemaphoreGive(sRefresh);
             // Saco de la suspension a task_Control
             vTaskResume(tControl);
-            vTaskResume(tBH1750);
+            //vTaskResume(tLuxo);
         }
     }   
 }
@@ -698,28 +687,89 @@ void task_Calibracion(void *pvParams)
     BaseType_t rx;
     calibration_t parametros;
     eeprom_cmd_t ecmd;
+    uint16_t lux;
 
     while(1){
         if(xSemaphoreTake(sCalib, portMAX_DELAY) == pdPASS){
             LED2_ON;
             // // qEreadcalib <- EEPROM
-            // ecmd = ECTRL_READ_CALIB;
-            // xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
-            // taskYIELD();
-            // xQueueReceive(qEreadcalib, &parametros, portMAX_DELAY);
+            ecmd = ECTRL_READ_CALIB;
+            xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
+            taskYIELD();
+            xQueueReceive(qEreadcalib, &parametros, portMAX_DELAY);
+            ///////////////////////////////////////////////////////
             // /////////////////
             // // CALIBRACION //
+            if(xQueueReceive(qLUX, &lux, portMAX_DELAY) == pdPASS){
+
+            }
             // /////////////////
             // // qEwritecalib -> EEPROM
-            // xQueueSend(qEwritecalib, &parametros, portMAX_DELAY);
-            // ecmd = ECTRL_WRITE_CALIB;
-            // xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
-            // taskYIELD();
-
+            xQueueSend(qEwritecalib, &parametros, portMAX_DELAY);
+            ecmd = ECTRL_WRITE_CALIB;
+            xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
+            taskYIELD();
+            /////////////////////////////////
             vTaskDelay(pdMS_TO_TICKS(1000));
             LED2_OFF;
         }
     }
+}
+
+void task_BH1750(void *pvParams)
+{
+    uint16_t lux = 0;
+    TickType_t last_tick = xTaskGetTickCount();
+
+    while(1){
+        // Si puedo tomar el bus
+        if(xSemaphoreTake(mI2C, portMAX_DELAY) == pdPASS){
+            // Leo luxometro
+            lux = bh1750_read();
+            // Vuelvo a disparar la lectura
+            bh1750_init(ONESHOT_LORES);
+            xSemaphoreGive(mI2C);
+            // Paso a la cola
+            xQueueSend(qLUX, &lux, portMAX_DELAY);
+        }
+        // Corre cada LUX_TIME
+        //vTaskDelayUntil(&last_tick, pdMS_TO_TICKS(LUX_TIME));
+        vTaskDelay(pdMS_TO_TICKS(25));
+    }
+}
+
+void setup_pwm(float duty)
+{
+    //Cargo el slice fisico del pin
+    uint slice_num = pwm_gpio_to_slice_num(PWM_OUT_PIN);
+    //Frec de clock de la pico 2
+    const float clock_freq = 125000000.f;              
+    const float freq = 1000.0;
+    const float divider = clock_freq / (freq * 8192);
+    //static float duty = 0.0;
+    static float duty0 = 0.0;
+    static float duty_f = 0.0;
+    static float alpha = 0.7;
+
+    //Pongo el pin como pwm
+    gpio_set_function(PWM_OUT_PIN, GPIO_FUNC_PWM);
+    //Calculo con precision de 16 bits de la frec que se quiere--65536        
+    //divider = clock_freq / (freq * 8192);    
+    pwm_set_clkdiv(slice_num, divider);
+    //16 bit de resolucion para el conteo maximo del ciclo de PWM--65535
+    pwm_set_wrap(slice_num, 8191);                 
+    //Calcula el duty cycle--65536
+
+    // Filtro EMA
+    //duty_f = alpha*duty + (1 - alpha)*duty0;
+    //duty0 = duty_f;
+    //if (duty_f > 1.0) duty_f = 1.0;
+    //if (duty_f < 0.0) duty_f = 0.0;
+
+    pwm_set_gpio_level(PWM_OUT_PIN, duty * 8192);
+    //pwm_set_gpio_level(PWM_OUT_PIN, duty_f * 8192);
+    // Habilita el PWM en el pin            
+    pwm_set_enabled(slice_num, true);
 }
 
 void task_Control(void *pvParams)
@@ -730,36 +780,124 @@ void task_Control(void *pvParams)
     settings_t settings;
     calibration_t calib;
     uint16_t lux;
-    float duty;
+    float lux_acc = 0.0;
     qLCD_t lcd;
     rtc_t time;
     uint8_t prev_sec;
     uint8_t bf[7];
+    uint8_t show_lux = 0;
+    //////////////////////////
+    ///// VARIABLES PID //////
+    float ts = (float) LUX_TIME;
+    // constantes pid
+    float kp, ti, td, ki, kd;
+    kp = 0.0005;
+    ki = 0.0001;
+    // acciones pid
+    float ap = 0;
+    float ai = 0;
+    float ad = 0;
+    // variables
+    float error = 0;
+    // anteriores
+    float ai0 = 0;
+    float error0 = 0;
+    // filtro de muestra
+    float alpha = 0.5;
+    float lux_f = 0.0;
+    float lux0 = 0.0;
+    // salida controlador
+    float duty = 0.5;
+    float duty0 = 0.0;
+    float duty_f = 0.0;
+    ///////////////////////////
+    uint16_t setpoint = 1000;
+    TickType_t last_tick = xTaskGetTickCount();
+    TickType_t tick;
+    TickType_t dif_ticks;
 
     while(1){
         // Actualizar seteos y calibracion ? (NO BLOQUEANTE)
         if(xSemaphoreTake(sRefresh, 0)){
             // Levanto valores de la eeprom
-            //ecmd = ECTRL_READ_SETTINGS;
-            //xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
-            //taskYIELD();
-            //xQueueReceive(qEread, &settings, portMAX_DELAY);
+            ecmd = ECTRL_READ_SETTINGS;
+            xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
+            taskYIELD();
+            xQueueReceive(qEread, &settings, portMAX_DELAY);
             //ecmd = ECTRL_READ_CALIB;
             //xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
             //taskYIELD();
             //xQueueReceive(qEreadcalib, &calib, portMAX_DELAY);
         }
         // Hay lectura del luxometro ?
-        if(xQueueReceive(qLUX, &lux, portMAX_DELAY) == pdPASS){
-            /////////////////
-            // CONTROL PWM //
-            /////////////////
-            // Funcion de test de pwm
-            duty = lux / 1000.0;
-            if(duty > 1.0) duty = 1.0;
+        // No lo hago bloqueante para que pueda imprimir dentro del tiempo de medicion
+        if(xQueueReceive(qLUX, &lux, 0) == pdPASS){
             //////////////////////////////////////////
-            xQueueSend(qPWM, &duty, portMAX_DELAY);
+            ///// CONTROL PID ////////////////////////
+            // ap = kp*error;
+            // ai = ki*(error+error0) + ai0;
+            // ad = kd*(error-error0);
+            // duty = ap + ai + ad;
+            //////////////////////////////////////////
+            //lux_f = alpha*(float)(lux) + (1 - alpha)*lux0;
+            //lux0 = lux_f;
 
+            error = (float) (settings.lux - lux);
+            
+            
+            // error = (float)(settings.lux - lux);
+            // Si el setpoint es mayor a la muestra
+            // El error es positivo
+            // Tengo que decrementar DUTY para ENCENDER la salida
+            // La PLANTA INVIERTE
+            // La ganancia debe tener signo negativo
+            ap = kp*error;
+            ai = ki*(error+error0) + ai0;
+            // salida del controlador
+            duty = ap + ai;
+            // guardo valores historicos
+            error0 = error;
+            ai0 = ai;
+            // filtro 1er orden
+            //duty_f = duty0 + alpha*(duty-duty0);
+            //duty0 = duty;
+            //if(duty_f > 1.0) duty_f = 1.0;
+
+            // Filtro EMA
+            duty_f = alpha*duty + (1 - alpha)*duty0;
+            duty0 = duty_f;
+            //if(error > 0.0) duty_f -= 0.05;
+            //else duty_f += 0.05;
+
+            // Antiwindup
+            if (duty_f > 1.0) duty_f = 1.0;
+            if (duty_f < 0.0) duty_f = 0.0;
+            // Actualizo el duty
+            // INVIERTO
+            setup_pwm(1 - duty_f);
+
+            last_tick = tick;
+            tick = xTaskGetTickCount();
+            dif_ticks = tick - last_tick;
+            printf("\neR = %f / AP = %f / AI = %f", error/500, ap, ai);
+            printf("\nd_Ticks: %5dms - LUX= %d - duty = %.2f", dif_ticks, lux, duty_f);
+
+            // para probar el filtro
+            //if(toggle) duty_f = 1.0;
+            //else duty_f = 0.0;
+            //xQueueSend(qPWM, &duty_f, portMAX_DELAY);
+            // Acumulo lux para mostrar en lcd
+            show_lux++;
+            lux_acc += (float) lux; 
+        }
+
+        
+
+        //Mostrar medicion de lux cada 10 muestras
+        if(show_lux > 9){
+            lux_acc = lux_acc / 10.0;
+            lux = (uint16_t) lux_acc;
+            lux_acc = 0.0;
             // Armo el texto para el LCD
             sprintf(lcd.text, "LUX: %5d", lux);
             lcd.line = 0;
@@ -768,22 +906,24 @@ void task_Control(void *pvParams)
             xQueueSend(qLCD, &lcd, portMAX_DELAY);
             // Fuerzo cambio de contexto
             taskYIELD();
+            // Reseteo contador
+            show_lux = 0;
+        }
 
-            // Guardo ultima lectura de segundos
-            prev_sec = time.sec;
-            // Leo la hora en el rtc
-            xSemaphoreGive(sRTC);
-            taskYIELD();
-            xQueueReceive(qRTC, &time, portMAX_DELAY);
-            // muestro la ultima hora si time.sec cambio
-            if(time.sec != prev_sec){
-                sprintf(lcd.text, "%02d/%02d %02d:%02d:%02d", time.day, time.month, 
-                                time.hour, time.min, time.sec);
-                lcd.line = 1;
-                lcd.clear = 0;
-                // Escribo hora en el LCD
-                xQueueSend(qLCD, &lcd, portMAX_DELAY);
-            } 
+        // Guardo ultima lectura de segundos
+        prev_sec = time.sec;
+        // Leo la hora en el rtc
+        xSemaphoreGive(sRTC);
+        taskYIELD();
+        xQueueReceive(qRTC, &time, portMAX_DELAY);
+        // muestro la ultima hora si time.sec cambio
+        if(time.sec != prev_sec){
+            sprintf(lcd.text, "%02d/%02d %02d:%02d:%02d", time.day, time.month, 
+                            time.hour, time.min, time.sec);
+            lcd.line = 1;
+            lcd.clear = 0;
+            // Escribo hora en el LCD
+            xQueueSend(qLCD, &lcd, portMAX_DELAY);
         }
     }
 }
@@ -795,10 +935,13 @@ void task_LedRun(void *pvParams)
         vTaskDelay(pdMS_TO_TICKS(500));
         gpio_put(LED_RUN_PIN, false);
         vTaskDelay(pdMS_TO_TICKS(500));
+        // PPS
+        if(toggle) toggle = 0;
+        else toggle = 1;
     }
 }
 
-void task_Consola(void *pvParameters) {
+void task_Consola(void *pvParams) {
     // buffer de almacenamiento de caracteres
     char buffer[8];
     int idx = 0;
@@ -868,6 +1011,10 @@ void task_Consola(void *pvParameters) {
                     vTaskDelay(pdMS_TO_TICKS(1));
                 }
             }
+            else if(buffer[0]=='t'){
+                // Imprimo tabla lut
+                for(uint8_t n=0; n<101; n++) printf("Duty: %.2f - Lux: %4d\n", lut[n].duty, lut[n].lux);
+            }
 
             // Mostrar instrucciones nuevamente
             printf("Ingresar 'd' para dump de registros, 'c' para borrar memoria: \r\n");
@@ -921,7 +1068,19 @@ int main()
     lcd_clear();
 
     // Inicializo BH1750
-    bh1750_init(BH1750_HIRES);
+    // bh1750_init(CONT_LORES);
+
+    // float d;
+    // // Lleno tabla lut
+    // for(uint8_t n=0; n<101; n++){
+    //     d = (float) n/100;
+    //     setup_pwm(d);
+    //     sleep_ms(25);
+    //     lut[n].duty = d;
+    //     lut[n].lux = bh1750_read();
+    // }
+
+    bh1750_init(ONESHOT_LORES);
 
     // Inicializo DS3231
     rtc_t init;
@@ -939,12 +1098,23 @@ int main()
     settings_t settings;
     settings.index = 0;
     settings.lux = 1000;
-    settings.user_max = 2000;
-    settings.user_min = 100;
+    settings.user_max = 1500;
+    settings.user_min = 500;
     settings.curva = 0;
     settings.time = init;
     settings2bytes(&settings, data);
     eeprom_write(data, EEPROM_DATA_BASE, 16);
+    sleep_ms(10);
+
+    calibration_t calib;
+    calib.kp = 0.5;
+    calib.ki = 0.1;
+    calib.kd = 3.14;
+    calib.lux_max = 5000;
+    calib.lux_min = 1;
+    memcpy(data, &calib, sizeof(calibration_t));
+    eeprom_write(data, 0x0000, 16);
+    sleep_ms(10);
 
     // Init LED RUN
     gpio_init(LED_RUN_PIN);
@@ -986,6 +1156,9 @@ int main()
 
     vSemaphoreCreateBinary(sEfull);
     vSemaphoreCreateBinary(sEempty);
+
+    // Creo semaforos counting y los libero
+    sLux_show = xSemaphoreCreateCounting(10, 0);
     
     // Creo mutex y lo libero
     mI2C = xSemaphoreCreateMutex();
@@ -1013,12 +1186,12 @@ int main()
 
     // Creo tareas
     xTaskCreate(task_Control, "Control", 256, NULL, 1, &tControl);
-    xTaskCreate(task_BH1750, "BH1750", 128, NULL, 2, &tBH1750);
-    xTaskCreate(task_PWM, "PWM", 128, NULL, 2, NULL);
-    xTaskCreate(task_Setear, "Setear", 512, NULL, 2, NULL);
+    xTaskCreate(task_Setear, "Setear", 512, NULL, 2, &tSetear);
+    //xTaskCreate(task_Calibracion, "Calibracion", 256, NULL, 2, NULL);
     xTaskCreate(task_LedRun, "Run", 128, NULL, 3, NULL);
-    //xTaskCreate(task_Calibracion, "Calibracion", 256, NULL, 3, NULL);
-    xTaskCreate(task_Consola, "Consola", 1024, NULL, 2, NULL);
+    xTaskCreate(task_BH1750, "BH1750", 128, NULL, 3, &tLuxo);
+    //xTaskCreate(task_PWM, "PWM", 128, NULL, 3, &tPWM);
+    //xTaskCreate(task_Consola, "Consola", 1024, NULL, 2, NULL);
     xTaskCreate(task_LCD, "LCD", 128, NULL, 4, NULL);
     xTaskCreate(task_RTC, "RTC", 128, NULL, 4, NULL);
     xTaskCreate(task_EEPROM, "EEPROM", 1024, NULL, 4, NULL);
