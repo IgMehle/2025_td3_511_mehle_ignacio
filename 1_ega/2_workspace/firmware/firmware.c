@@ -31,7 +31,7 @@
 #define AL_HI_PIN       21
 #define BUZZER_PIN      12
 // CONSTANTES
-#define LUX_TIME        20
+#define LUX_TIME        25
 
 #define DEBOUNCE_TIME   20
 #define I2C1_FREQ       100000
@@ -83,7 +83,7 @@ typedef struct lcd {
 // ESTRUCTURA BASE DE SETTINGS
 typedef struct settings {
     uint16_t index; // 2B
-    uint16_t lux; // 2B
+    uint16_t setpoint; // 2B
     uint16_t user_max; // 2B
     uint16_t user_min; // 2B
     uint8_t curva; // 1B
@@ -116,8 +116,8 @@ typedef enum ecmd {
 // ESTRUCTURA DE PARAMETROS CALIBRACION
 typedef struct calib {
     float kp;
-    float ki;
-    float kd;
+    float ti;
+    float td;
     uint16_t lux_max;
     uint16_t lux_min;
 } calibration_t;
@@ -143,8 +143,8 @@ void settings2bytes(settings_t *settings, uint8_t *bytes)
     bytes[0] = (uint8_t)(((settings->index)>>8) & 0x00FF);
     bytes[1] = (uint8_t)(settings->index & 0x00FF);
 
-    bytes[2] = (uint8_t)(((settings->lux)>>8) & 0x00FF);
-    bytes[3] = (uint8_t)(settings->lux & 0x00FF);
+    bytes[2] = (uint8_t)(((settings->setpoint)>>8) & 0x00FF);
+    bytes[3] = (uint8_t)(settings->setpoint & 0x00FF);
     
     bytes[4] = (uint8_t)(((settings->user_max)>>8) & 0x00FF);
     bytes[5] = (uint8_t)(settings->user_max & 0x00FF);
@@ -166,7 +166,7 @@ void settings2bytes(settings_t *settings, uint8_t *bytes)
 void bytes2settings(settings_t *settings, uint8_t *bytes)
 {
     settings->index = ((bytes[0]<<8) & 0xFF00) | bytes[1];
-    settings->lux = ((bytes[2]<<8) & 0xFF00) | bytes[3];
+    settings->setpoint = ((bytes[2]<<8) & 0xFF00) | bytes[3];
     settings->user_max = ((bytes[4]<<8) & 0xFF00) | bytes[5];
     settings->user_min = ((bytes[6]<<8) & 0xFF00) | bytes[7];
     
@@ -409,7 +409,7 @@ void task_EEPROM(void *pvParams)
                 eeprom_read(bf, 0x0000, 16);
                 memcpy(&calib, bf, sizeof(calibration_t));
                 printf("\r\nKP= %f - KI= %f - KD= %f - LUXMAX= %d - luxmin= %d",
-                    calib.kp, calib.ki, calib.kd, calib.lux_max, calib.lux_min);
+                    calib.kp, calib.ti, calib.td, calib.lux_max, calib.lux_min);
                 fflush(stdout);
                 // Paso el numero de items en memoria
                 //dump_q.length = index;
@@ -482,6 +482,8 @@ void task_Setear(void *params)
         {"ALARMA MIN:", 10, 0, 5000},
         {"CURVA:", 0, 0, 1},
         {"CALIBRACION?", 0, 0, 1}
+        // {"PRINT LOG?", 0, 0, 1}
+        // {"BORRAR LOG?", 0, 0, 1}
     };
     // indice del menu
     uint8_t indice = 0;
@@ -533,15 +535,17 @@ void task_Setear(void *params)
             printf("\n%d: (%02d/%02d %02d:%02d:%02d) Lux: %d, Max: %d, Min: %d, Curva: %d",
                             settings.index, settings.time.day, settings.time.month,
                             settings.time.hour, settings.time.min,
-                            settings.time.sec, settings.lux, settings.user_max,
+                            settings.time.sec, settings.setpoint, settings.user_max,
                             settings.user_min, settings.curva);
             // Cargo settings actuales al menu
             num_registro = settings.index;
-            menu[0].valor = settings.lux;
+            menu[0].valor = settings.setpoint;
             menu[1].valor = settings.user_max;
             menu[2].valor = settings.user_min;
             menu[3].valor = (uint16_t) settings.curva;
             menu[4].valor = 0; // No hago calibracion salvo que especifique
+            // menu[5].valor = 0;
+            // menu[6].valor = 0;
         
             // limpio variable
             opc = 0;
@@ -563,6 +567,17 @@ void task_Setear(void *params)
                     taskYIELD();
                     // Muestro valor actualizado en LCD
                     sprintf(lcd.text, "%4d", menu[indice].valor);
+                    // if(indice < 3){
+                    //     sprintf(lcd.text, "%4d", menu[indice].valor);
+                    // }
+                    // else if(indice == 3){
+                    //     sprintf(lcd.text, "LENTA");
+                    //     menu[indice].valor = 0;
+                    // }
+                    // else {
+                    //     sprintf(lcd.text, "NO");
+                    //     menu[indice].valor = 0;
+                    // }
                     lcd.line = 1;
                     lcd.clear = 0;
                     ///// -> LCD
@@ -586,10 +601,20 @@ void task_Setear(void *params)
                         menu[indice].valor++;
                         // Muestro valor actualizado en LCD
                         sprintf(lcd.text, "%4d", menu[indice].valor);
+                        // if(indice < 3){
+                        //     sprintf(lcd.text, "%4d", menu[indice].valor);
+                        // }
+                        // else if(indice == 3){
+                        //     if(menu[indice].valor) sprintf(lcd.text, "RAPIDA");
+                        //     else sprintf(lcd.text, "LENTA");
+                        // }
+                        // else {
+                        //     if(menu[indice].valor) sprintf(lcd.text, "SI");
+                        //     else sprintf(lcd.text, "NO");
+                        // }
                         lcd.line = 1;
                         lcd.clear = 0;
                         ///// -> LCD
-                        //xQueueOverwrite(qLCD, &lcd);
                         xQueueSend(qLCD, &lcd, portMAX_DELAY);
                         taskYIELD();
                     }
@@ -601,10 +626,20 @@ void task_Setear(void *params)
                         menu[indice].valor--;
                         // Muestro valor actualizado en LCD
                         sprintf(lcd.text, "%4d", menu[indice].valor);
+                        // if(indice < 3){
+                        //     sprintf(lcd.text, "%4d", menu[indice].valor);
+                        // }
+                        // else if(indice == 3){
+                        //     if(menu[indice].valor) sprintf(lcd.text, "RAPIDA");
+                        //     else sprintf(lcd.text, "LENTA");
+                        // }
+                        // else {
+                        //     if(menu[indice].valor) sprintf(lcd.text, "SI");
+                        //     else sprintf(lcd.text, "NO");
+                        // }
                         lcd.line = 1;
                         lcd.clear = 0;
                         ///// -> LCD
-                        //xQueueOverwrite(qLCD, &lcd);
                         xQueueSend(qLCD, &lcd, portMAX_DELAY);
                         taskYIELD();
                     }
@@ -616,6 +651,9 @@ void task_Setear(void *params)
                     // Mostrar nueva pagina del menu
                     show_menu = 1;
                     opc = 0;
+                    if(indice == 4){
+                        
+                    }
                     break;
                 default:
                     break;
@@ -651,7 +689,7 @@ void task_Setear(void *params)
             // cargo menu actualizado a settings
             num_registro++;
             settings.index = num_registro;
-            settings.lux = menu[0].valor;
+            settings.setpoint = menu[0].valor;
             settings.user_max = menu[1].valor;
             settings.user_min = menu[2].valor;
             settings.curva = (uint8_t) menu[3].valor;
@@ -733,8 +771,8 @@ void task_BH1750(void *pvParams)
             xQueueSend(qLUX, &lux, portMAX_DELAY);
         }
         // Corre cada LUX_TIME
-        //vTaskDelayUntil(&last_tick, pdMS_TO_TICKS(LUX_TIME));
-        vTaskDelay(pdMS_TO_TICKS(25));
+        vTaskDelayUntil(&last_tick, pdMS_TO_TICKS(LUX_TIME));
+        //vTaskDelay(pdMS_TO_TICKS(LUX_TIME));
     }
 }
 
@@ -790,23 +828,30 @@ void task_Control(void *pvParams)
     ///// VARIABLES PID //////
     float ts = (float) LUX_TIME;
     // constantes pid
-    float kp, ti, td, ki, kd;
-    kp = 0.0005;
-    ki = 0.0001;
+    float kp = 0.0002;
+    // float kp_lento = 0.00005;
+    //float ti = 5.0;
+    //float td = 0.0;
+    float ki = 0.0001;
+    //float ki_lento = 0.00001;
+    float kd = 0.00001;
     // acciones pid
-    float ap = 0;
-    float ai = 0;
-    float ad = 0;
-    // variables
-    float error = 0;
+    float ap = 0.0;
+    float ai = 0.0;
+    float ad = 0.0;
+    // error absoluto y relativo
+    float error = 0.0;
+    float eR = 0.0;
     // anteriores
-    float ai0 = 0;
-    float error0 = 0;
+    float ai0 = 0.0;
+    float error0 = 0.0;
     // filtro de muestra
-    float alpha = 0.5;
+    float alpha2 = 0.4;
     float lux_f = 0.0;
     float lux0 = 0.0;
     // salida controlador
+    float alpha = 0.7;
+    //float alpha_lento = 0.1;
     float duty = 0.5;
     float duty0 = 0.0;
     float duty_f = 0.0;
@@ -828,6 +873,10 @@ void task_Control(void *pvParams)
             //xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
             //taskYIELD();
             //xQueueReceive(qEreadcalib, &calib, portMAX_DELAY);
+
+            // Calculo de constantes integral y derivativa
+            //ki = kp/ti;
+            //kd = kp*td;
         }
         // Hay lectura del luxometro ?
         // No lo hago bloqueante para que pueda imprimir dentro del tiempo de medicion
@@ -835,67 +884,82 @@ void task_Control(void *pvParams)
             //////////////////////////////////////////
             ///// CONTROL PID ////////////////////////
             // ap = kp*error;
-            // ai = ki*(error+error0) + ai0;
-            // ad = kd*(error-error0);
+            // ai = (kp*ts/ti)*(error+error0) + ai0;
+            // ad = (kp*td/ts)*(error-error0);
             // duty = ap + ai + ad;
             //////////////////////////////////////////
-            //lux_f = alpha*(float)(lux) + (1 - alpha)*lux0;
-            //lux0 = lux_f;
 
-            error = (float) (settings.lux - lux);
-            
-            
-            // error = (float)(settings.lux - lux);
-            // Si el setpoint es mayor a la muestra
-            // El error es positivo
-            // Tengo que decrementar DUTY para ENCENDER la salida
-            // La PLANTA INVIERTE
-            // La ganancia debe tener signo negativo
+            // Filtro EMA 2 - Suavizado de muestra
+            lux_f = alpha2*lux + (1 - alpha2)*lux0;
+            lux0 = lux_f;
+
+            // CALCULO DEL ERROR
+            error = (float)(settings.setpoint - lux_f);
+
+            // BANDA DE ERROR
+            eR = error / settings.setpoint;
+            // Leds debug muestran banda de error al 5%
+            if(eR > 0.05) LED1_ON;
+            else LED1_OFF;
+            if(eR < -0.05) LED2_ON;
+            else LED2_OFF;
+
+            // ACCIONES PID
             ap = kp*error;
             ai = ki*(error+error0) + ai0;
-            // salida del controlador
-            duty = ap + ai;
-            // guardo valores historicos
+            ad = kd*(error-error0);
+
+            // ANTIWINDUP KI
+            if(ai > 1.0) ai = 1.0;
+            if(ai < 0.0) ai = 0.0;
+
+            // valores actuales -> anteriores
             error0 = error;
             ai0 = ai;
-            // filtro 1er orden
-            //duty_f = duty0 + alpha*(duty-duty0);
-            //duty0 = duty;
-            //if(duty_f > 1.0) duty_f = 1.0;
 
-            // Filtro EMA
+            // SALIDA DEL CONTROLADOR PID
+            duty = ap + ai + ad;
+
+            // Filtro EMA - suavizado de duty
             duty_f = alpha*duty + (1 - alpha)*duty0;
             duty0 = duty_f;
-            //if(error > 0.0) duty_f -= 0.05;
-            //else duty_f += 0.05;
 
-            // Antiwindup
-            if (duty_f > 1.0) duty_f = 1.0;
-            if (duty_f < 0.0) duty_f = 0.0;
-            // Actualizo el duty
-            // INVIERTO
+            // CLAMP + ALARMAS
+            if(duty_f > 0.95){
+                // Enciendo alarma de limite de ajuste
+                ALARMA_LO_ON;
+                // clamp
+                duty_f = 0.95;
+            }
+            else ALARMA_LO_OFF;
+
+            if(duty_f < 0.10){
+                // Enciendo alarma de limite de ajuste
+                ALARMA_HI_ON;
+                // clamp
+                duty_f = 0.10;
+            }
+            else ALARMA_HI_OFF;
+
+            // ACTUALIZO EL DUTY
+            // IMPORTANTE: 0 -> MAX / 1 -> MIN
             setup_pwm(1 - duty_f);
 
             last_tick = tick;
             tick = xTaskGetTickCount();
             dif_ticks = tick - last_tick;
-            printf("\neR = %f / AP = %f / AI = %f", error/500, ap, ai);
-            printf("\nd_Ticks: %5dms - LUX= %d - duty = %.2f", dif_ticks, lux, duty_f);
+            printf("\rLUX = %5d\teR = %.2f\tAP = %.3f\tAI = %.3f\tAD = %.3f\tduty = %2.2f\t%4dms", 
+                lux, 100*eR, ap, ai, ad, duty_f, dif_ticks);
+            // printf("\nd_Ticks: %5dms - LUX= %d - duty = %.2f", dif_ticks, lux, duty_f);
 
-            // para probar el filtro
-            //if(toggle) duty_f = 1.0;
-            //else duty_f = 0.0;
-            //xQueueSend(qPWM, &duty_f, portMAX_DELAY);
             // Acumulo lux para mostrar en lcd
             show_lux++;
             lux_acc += (float) lux; 
         }
 
-        
-
-        //Mostrar medicion de lux cada 10 muestras
+        //Mostrar promedio de medicion de lux cada 10 muestras
         if(show_lux > 9){
-            lux_acc = lux_acc / 10.0;
+            lux_acc = lux_acc / show_lux;
             lux = (uint16_t) lux_acc;
             lux_acc = 0.0;
             // Armo el texto para el LCD
@@ -989,7 +1053,7 @@ void task_Consola(void *pvParams) {
                         printf("%d: (%02d/%02d %02d:%02d:%02d) Lux: %d, Max: %d, Min: %d, Curva: %d\n",
                             settings.index, settings.time.day, settings.time.month,
                             settings.time.hour, settings.time.min,
-                            settings.time.sec, settings.lux, settings.user_max,
+                            settings.time.sec, settings.setpoint, settings.user_max,
                             settings.user_min, settings.curva);
                         fflush(stdout);
                         vTaskDelay(pdMS_TO_TICKS(100));
@@ -1054,7 +1118,6 @@ int main()
     gpio_set_irq_enabled(ENC_A_PIN, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true);
     gpio_set_irq_enabled(ENC_B_PIN, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true);
 
-
     // I2C INIT
     i2c_init(i2c1, I2C1_FREQ);
     gpio_set_function(I2C1_SDA_PIN, GPIO_FUNC_I2C);
@@ -1097,7 +1160,7 @@ int main()
     uint8_t data[16];
     settings_t settings;
     settings.index = 0;
-    settings.lux = 1000;
+    settings.setpoint = 1000;
     settings.user_max = 1500;
     settings.user_min = 500;
     settings.curva = 0;
@@ -1107,9 +1170,9 @@ int main()
     sleep_ms(10);
 
     calibration_t calib;
-    calib.kp = 0.5;
-    calib.ki = 0.1;
-    calib.kd = 3.14;
+    calib.kp = 0.0005;
+    calib.ti = 5.0;
+    calib.td = 0.0;
     calib.lux_max = 5000;
     calib.lux_min = 1;
     memcpy(data, &calib, sizeof(calibration_t));
@@ -1186,12 +1249,12 @@ int main()
 
     // Creo tareas
     xTaskCreate(task_Control, "Control", 256, NULL, 1, &tControl);
+    //xTaskCreate(task_Consola, "Consola", 1024, NULL, 1, NULL);
     xTaskCreate(task_Setear, "Setear", 512, NULL, 2, &tSetear);
     //xTaskCreate(task_Calibracion, "Calibracion", 256, NULL, 2, NULL);
     xTaskCreate(task_LedRun, "Run", 128, NULL, 3, NULL);
     xTaskCreate(task_BH1750, "BH1750", 128, NULL, 3, &tLuxo);
     //xTaskCreate(task_PWM, "PWM", 128, NULL, 3, &tPWM);
-    //xTaskCreate(task_Consola, "Consola", 1024, NULL, 2, NULL);
     xTaskCreate(task_LCD, "LCD", 128, NULL, 4, NULL);
     xTaskCreate(task_RTC, "RTC", 128, NULL, 4, NULL);
     xTaskCreate(task_EEPROM, "EEPROM", 1024, NULL, 4, NULL);
