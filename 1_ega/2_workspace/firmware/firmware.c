@@ -36,7 +36,7 @@
 #define DEBOUNCE_TIME   20
 #define I2C1_FREQ       100000
 #define LCD_ADDR        0x27
-#define MENU_SIZE       5
+#define MENU_SIZE       7
 #define EEPROM_QUEUE_SIZE   1
 #define EEPROM_DATA_BASE    0x20
 #define EEPROM_DATA_SIZE    0x10
@@ -247,26 +247,6 @@ void task_Encoder(void *pvParams)
     }
 }
 
-void task_PWM(void *pvParams)
-{
-    //Cargo el slice fisico del pin
-    uint slice_num = pwm_gpio_to_slice_num(PWM_OUT_PIN);
-    //Frec de clock de la pico 2
-    float clock_freq = 125000000.f;              
-    float freq = 1000.0;
-    float divider = clock_freq / (freq * 8192);
-    float duty = 0.0;
-    float duty0 = 0.0;
-    float duty_f = 0.0;
-    float alpha = 0.2;
-
-    while(1){
-        if (xQueueReceive(qPWM, &duty, portMAX_DELAY) == pdPASS){
-                            
-        }
-    }
-}
-
 void task_RTC(void *pvParams)
 {
     rtc_t time;
@@ -459,12 +439,81 @@ void task_EEPROM(void *pvParams)
     }
 }
 
+void autotune(void)
+{
+    // respuesta de lectura de queue
+    static BaseType_t rx;
+    // comandos de eeprom
+    static eeprom_cmd_t ecmd;
+    // comando del encoder
+    static char opc;
+
+    //////////////////////////////////
+    ///// RUTINA DE AUTOTUNE PID /////
+    //////////////////////////////////
+    static float ku = 0.0;
+    static float tu = 0.0;
+    //////////////////////////////////
+}
+
+void log_settings(void)
+{
+    // Comando de eeprom
+    eeprom_cmd_t ecmd;
+    // Estructuras para manejo de dump
+    eepromDumpRequest_t dump;
+    settings_t settings;
+
+    ///// DUMP DE SETTINGS POR CONSOLA /////
+    ecmd = ECTRL_DUMP;
+    xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
+    taskYIELD();
+    // Recibir datos y mostrarlos
+    xQueueReceive(qEdump, &dump, portMAX_DELAY);
+    // for (cantidad de items en dump.lenght)
+    for (uint16_t i = 0; i < dump.length; i++){
+        // Recibo de cola response con un timeout
+        if(xQueueReceive(dump.responseQueue, &settings, pdMS_TO_TICKS(100)) == pdPASS){
+            // Mientras pueda recibir de la cola, imprimo el registro
+            printf("%d: (%02d/%02d %02d:%02d:%02d) Lux: %d, Max: %d, Min: %d, Curva: %d\n",
+                settings.index, settings.time.day, settings.time.month,
+                settings.time.hour, settings.time.min,
+                settings.time.sec, settings.setpoint, settings.user_max,
+                settings.user_min, settings.curva);
+            fflush(stdout);
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+        // Si no hay mas registros, salgo
+        else break;
+    }
+    // Borro cola para limpiar RAM
+    vQueueDelete(dump.responseQueue);
+}
+
+void clear_settings(void)
+{
+    // Comando de eeprom
+    eeprom_cmd_t ecmd;
+
+    ecmd = ECTRL_ERASE;
+    xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
+    taskYIELD();
+    // Esperar confirmación
+    if(xSemaphoreTake(sEempty, portMAX_DELAY) == pdPASS){
+        printf("Borrado completado.\r\n");
+        fflush(stdout);
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+}
+
 void task_Setear(void *params)
 {
     // respuesta de lectura de queue
     BaseType_t rx;
     // comandos de eeprom
     eeprom_cmd_t ecmd;
+    // Estructura para manejo de dump
+    eepromDumpRequest_t dump;
     // struct de hora
     rtc_t time = {0};
     // lineas del lcd
@@ -481,9 +530,9 @@ void task_Setear(void *params)
         {"ALARMA MAX:", 1000, 0, 5000},
         {"ALARMA MIN:", 10, 0, 5000},
         {"CURVA:", 0, 0, 1},
-        {"CALIBRACION?", 0, 0, 1}
-        // {"PRINT LOG?", 0, 0, 1}
-        // {"BORRAR LOG?", 0, 0, 1}
+        {"CALIBRACION?", 0, 0, 1},
+        {"IMPRIMIR LOG?", 0, 0, 1},
+        {"BORRAR LOG?", 0, 0, 1}
     };
     // indice del menu
     uint8_t indice = 0;
@@ -544,8 +593,8 @@ void task_Setear(void *params)
             menu[2].valor = settings.user_min;
             menu[3].valor = (uint16_t) settings.curva;
             menu[4].valor = 0; // No hago calibracion salvo que especifique
-            // menu[5].valor = 0;
-            // menu[6].valor = 0;
+            menu[5].valor = 0;
+            menu[6].valor = 0;
         
             // limpio variable
             opc = 0;
@@ -566,20 +615,13 @@ void task_Setear(void *params)
                     xQueueSend(qLCD, &lcd, portMAX_DELAY);
                     taskYIELD();
                     // Muestro valor actualizado en LCD
-                    sprintf(lcd.text, "%4d", menu[indice].valor);
-                    // if(indice < 3){
-                    //     sprintf(lcd.text, "%4d", menu[indice].valor);
-                    // }
-                    // else if(indice == 3){
-                    //     sprintf(lcd.text, "LENTA");
-                    //     menu[indice].valor = 0;
-                    // }
-                    // else {
-                    //     sprintf(lcd.text, "NO");
-                    //     menu[indice].valor = 0;
-                    // }
                     lcd.line = 1;
                     lcd.clear = 0;
+                    //sprintf(lcd.text, "%6d", menu[indice].valor);
+                    if(indice < 3) sprintf(lcd.text, "%6d", menu[indice].valor);
+                    else if(indice == 3) sprintf(lcd.text, " LENTA");
+                    else sprintf(lcd.text, "    NO");
+
                     ///// -> LCD
                     xQueueSend(qLCD, &lcd, portMAX_DELAY);
                     taskYIELD();
@@ -600,20 +642,12 @@ void task_Setear(void *params)
                     if(menu[indice].valor < menu[indice].max){
                         menu[indice].valor++;
                         // Muestro valor actualizado en LCD
-                        sprintf(lcd.text, "%4d", menu[indice].valor);
-                        // if(indice < 3){
-                        //     sprintf(lcd.text, "%4d", menu[indice].valor);
-                        // }
-                        // else if(indice == 3){
-                        //     if(menu[indice].valor) sprintf(lcd.text, "RAPIDA");
-                        //     else sprintf(lcd.text, "LENTA");
-                        // }
-                        // else {
-                        //     if(menu[indice].valor) sprintf(lcd.text, "SI");
-                        //     else sprintf(lcd.text, "NO");
-                        // }
                         lcd.line = 1;
                         lcd.clear = 0;
+                        //sprintf(lcd.text, "%4d", menu[indice].valor);
+                        if(indice < 3) sprintf(lcd.text, "%6d", menu[indice].valor);
+                        else if(indice == 3) sprintf(lcd.text, " LENTA");
+                        else sprintf(lcd.text, "    SI");
                         ///// -> LCD
                         xQueueSend(qLCD, &lcd, portMAX_DELAY);
                         taskYIELD();
@@ -625,20 +659,12 @@ void task_Setear(void *params)
                     if(menu[indice].valor > menu[indice].min){
                         menu[indice].valor--;
                         // Muestro valor actualizado en LCD
-                        sprintf(lcd.text, "%4d", menu[indice].valor);
-                        // if(indice < 3){
-                        //     sprintf(lcd.text, "%4d", menu[indice].valor);
-                        // }
-                        // else if(indice == 3){
-                        //     if(menu[indice].valor) sprintf(lcd.text, "RAPIDA");
-                        //     else sprintf(lcd.text, "LENTA");
-                        // }
-                        // else {
-                        //     if(menu[indice].valor) sprintf(lcd.text, "SI");
-                        //     else sprintf(lcd.text, "NO");
-                        // }
                         lcd.line = 1;
                         lcd.clear = 0;
+                        //sprintf(lcd.text, "%4d", menu[indice].valor);
+                        if(indice < 3) sprintf(lcd.text, "%6d", menu[indice].valor);
+                        else if(indice == 3) sprintf(lcd.text, "RAPIDA");
+                        else sprintf(lcd.text, "    NO");
                         ///// -> LCD
                         xQueueSend(qLCD, &lcd, portMAX_DELAY);
                         taskYIELD();
@@ -646,14 +672,24 @@ void task_Setear(void *params)
                     opc = 0;
                     break;
                 case 'P':
+                    // FUNCIONES ESPECIALES
+                    if(indice == 4 && menu[4].valor){
+                        // RUTINA DE CALIBRACION
+                        //autotune();
+                    }
+                    else if(indice == 5  && menu[5].valor){
+                        // IMPRIMO LOG DE SETTINGS
+                        log_settings();
+                    }
+                    else if(indice == 6  && menu[6].valor){
+                        // BORRO SETTINGS
+                        clear_settings();
+                    }
                     // Salto al proximo item del menu
                     indice++;
                     // Mostrar nueva pagina del menu
                     show_menu = 1;
                     opc = 0;
-                    if(indice == 4){
-                        
-                    }
                     break;
                 default:
                     break;
@@ -680,11 +716,6 @@ void task_Setear(void *params)
             lcd.clear = 0;
             xQueueSend(qLCD, &lcd, portMAX_DELAY);
             taskYIELD();
-            // LCD CLEAR
-            //sprintf(lcd.text, "");
-            //lcd.line = 0;
-            //lcd.clear = 1;
-            //xQueueSend(qLCD, &lcd, portMAX_DELAY);
             
             // cargo menu actualizado a settings
             num_registro++;
@@ -717,41 +748,6 @@ void task_Setear(void *params)
             //vTaskResume(tLuxo);
         }
     }   
-}
-
-void task_Calibracion(void *pvParams)
-{
-    // respuesta de lectura de queue
-    BaseType_t rx;
-    calibration_t parametros;
-    eeprom_cmd_t ecmd;
-    uint16_t lux;
-
-    while(1){
-        if(xSemaphoreTake(sCalib, portMAX_DELAY) == pdPASS){
-            LED2_ON;
-            // // qEreadcalib <- EEPROM
-            ecmd = ECTRL_READ_CALIB;
-            xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
-            taskYIELD();
-            xQueueReceive(qEreadcalib, &parametros, portMAX_DELAY);
-            ///////////////////////////////////////////////////////
-            // /////////////////
-            // // CALIBRACION //
-            if(xQueueReceive(qLUX, &lux, portMAX_DELAY) == pdPASS){
-
-            }
-            // /////////////////
-            // // qEwritecalib -> EEPROM
-            xQueueSend(qEwritecalib, &parametros, portMAX_DELAY);
-            ecmd = ECTRL_WRITE_CALIB;
-            xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
-            taskYIELD();
-            /////////////////////////////////
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            LED2_OFF;
-        }
-    }
 }
 
 void task_BH1750(void *pvParams)
@@ -787,7 +783,6 @@ void setup_pwm(float duty)
     //static float duty = 0.0;
     static float duty0 = 0.0;
     static float duty_f = 0.0;
-    static float alpha = 0.7;
 
     //Pongo el pin como pwm
     gpio_set_function(PWM_OUT_PIN, GPIO_FUNC_PWM);
@@ -798,14 +793,7 @@ void setup_pwm(float duty)
     pwm_set_wrap(slice_num, 8191);                 
     //Calcula el duty cycle--65536
 
-    // Filtro EMA
-    //duty_f = alpha*duty + (1 - alpha)*duty0;
-    //duty0 = duty_f;
-    //if (duty_f > 1.0) duty_f = 1.0;
-    //if (duty_f < 0.0) duty_f = 0.0;
-
     pwm_set_gpio_level(PWM_OUT_PIN, duty * 8192);
-    //pwm_set_gpio_level(PWM_OUT_PIN, duty_f * 8192);
     // Habilita el PWM en el pin            
     pwm_set_enabled(slice_num, true);
 }
@@ -909,7 +897,7 @@ void task_Control(void *pvParams)
             ai = ki*(error+error0) + ai0;
             ad = kd*(error-error0);
 
-            // ANTIWINDUP KI
+            // ANTIWINDUP AI
             if(ai > 1.0) ai = 1.0;
             if(ai < 0.0) ai = 0.0;
 
@@ -948,8 +936,8 @@ void task_Control(void *pvParams)
             last_tick = tick;
             tick = xTaskGetTickCount();
             dif_ticks = tick - last_tick;
-            printf("\rLUX = %5d\teR = %.2f\tAP = %.3f\tAI = %.3f\tAD = %.3f\tduty = %2.2f\t%4dms", 
-                lux, 100*eR, ap, ai, ad, duty_f, dif_ticks);
+            //printf("\rLUX = %5d\teR = %.2f\tAP = %.3f\tAI = %.3f\tAD = %.3f\tduty = %2.2f\t%4dms", 
+            //    lux, 100*eR, ap, ai, ad, duty_f, dif_ticks);
             // printf("\nd_Ticks: %5dms - LUX= %d - duty = %.2f", dif_ticks, lux, duty_f);
 
             // Acumulo lux para mostrar en lcd
@@ -1002,95 +990,6 @@ void task_LedRun(void *pvParams)
         // PPS
         if(toggle) toggle = 0;
         else toggle = 1;
-    }
-}
-
-void task_Consola(void *pvParams) {
-    // buffer de almacenamiento de caracteres
-    char buffer[8];
-    int idx = 0;
-    // Comando de eeprom
-    eeprom_cmd_t ecmd;
-    // Estructuras para manejo de dump
-    eepromDumpRequest_t dump;
-    settings_t settings;
-
-    // Mensaje inicial
-    printf("Ingresar 'd' para dump de registros, 'c' para borrar memoria: \r\n");
-    fflush(stdout);
-    vTaskDelay(pdMS_TO_TICKS(1));
-
-    while (true) {
-        // Bloquea hasta que se ingrese un carácter por USB
-        int ch = getchar_timeout_us(500000);
-
-        if (ch == PICO_ERROR_TIMEOUT) {
-            // No se ingresó nada → ceder CPU
-            vTaskDelay(pdMS_TO_TICKS(10));
-            continue;
-        }
-
-        if (ch == '\r' || ch == '\n') {
-            // Fin de línea: procesar lo que hay en el buffer
-            buffer[idx] = '\0';
-            idx = 0; // reinicio índice para próxima entrada
-
-            //printf("Comando recibido: %s\r\n", buffer);
-            //fflush(stdout);
-            //vTaskDelay(pdMS_TO_TICKS(1));
-
-            if (buffer[0] == 'd') {
-                ecmd = ECTRL_DUMP;
-                xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
-                taskYIELD();
-                // Recibir datos y mostrarlos
-                xQueueReceive(qEdump, &dump, portMAX_DELAY);
-                // for (cantidad de items en dump.lenght)
-                for (uint16_t i = 0; i < dump.length; i++){
-                    // Recibo de cola response con un timeout
-                    if(xQueueReceive(dump.responseQueue, &settings, pdMS_TO_TICKS(100)) == pdPASS){
-                        // Mientras pueda recibir de la cola, imprimo el registro
-                        printf("%d: (%02d/%02d %02d:%02d:%02d) Lux: %d, Max: %d, Min: %d, Curva: %d\n",
-                            settings.index, settings.time.day, settings.time.month,
-                            settings.time.hour, settings.time.min,
-                            settings.time.sec, settings.setpoint, settings.user_max,
-                            settings.user_min, settings.curva);
-                        fflush(stdout);
-                        vTaskDelay(pdMS_TO_TICKS(100));
-                    }
-                    // Si no hay mas registros, salgo
-                    else break;
-                }
-                // Borro cola para limpiar RAM
-                vQueueDelete(dump.responseQueue);   
-            } 
-            else if (buffer[0] == 'c') {
-                ecmd = ECTRL_ERASE;
-                xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
-                taskYIELD();
-                // Esperar confirmación
-                if(xSemaphoreTake(sEempty, portMAX_DELAY) == pdPASS){
-                    printf("Borrado completado.\r\n");
-                    fflush(stdout);
-                    vTaskDelay(pdMS_TO_TICKS(1));
-                }
-            }
-            else if(buffer[0]=='t'){
-                // Imprimo tabla lut
-                for(uint8_t n=0; n<101; n++) printf("Duty: %.2f - Lux: %4d\n", lut[n].duty, lut[n].lux);
-            }
-
-            // Mostrar instrucciones nuevamente
-            printf("Ingresar 'd' para dump de registros, 'c' para borrar memoria: \r\n");
-            fflush(stdout);
-            vTaskDelay(pdMS_TO_TICKS(1));
-
-        } else if (ch != EOF) {
-            // Acumular en el buffer si no es fin de línea
-            if (idx < (int)(sizeof(buffer) - 1)) {
-                buffer[idx++] = (char)ch;
-            }
-        }
     }
 }
 
@@ -1249,12 +1148,9 @@ int main()
 
     // Creo tareas
     xTaskCreate(task_Control, "Control", 256, NULL, 1, &tControl);
-    //xTaskCreate(task_Consola, "Consola", 1024, NULL, 1, NULL);
-    xTaskCreate(task_Setear, "Setear", 512, NULL, 2, &tSetear);
-    //xTaskCreate(task_Calibracion, "Calibracion", 256, NULL, 2, NULL);
+    xTaskCreate(task_Setear, "Setear", 1024, NULL, 2, &tSetear);
     xTaskCreate(task_LedRun, "Run", 128, NULL, 3, NULL);
-    xTaskCreate(task_BH1750, "BH1750", 128, NULL, 3, &tLuxo);
-    //xTaskCreate(task_PWM, "PWM", 128, NULL, 3, &tPWM);
+    xTaskCreate(task_BH1750, "BH1750", 128, NULL, 4, &tLuxo);
     xTaskCreate(task_LCD, "LCD", 128, NULL, 4, NULL);
     xTaskCreate(task_RTC, "RTC", 128, NULL, 4, NULL);
     xTaskCreate(task_EEPROM, "EEPROM", 1024, NULL, 4, NULL);
