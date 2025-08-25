@@ -59,7 +59,7 @@
 #define ALARMA_HI_OFF   gpio_put(AL_HI_PIN, true)
 
 // Handles de tareas
-TaskHandle_t tControl, tLuxo, tPWM, tSetear;
+TaskHandle_t tControl, tLuxo, tPWM, tConfig;
 // Queues de datos inter tarea
 QueueHandle_t qIRQ, qCTRL, qPWM, qLUX, qLCD, qRTC;
 // Queues de manejo de eeprom
@@ -118,6 +118,8 @@ typedef struct calib {
     float kp;
     float ti;
     float td;
+    //float alpha_r;
+    //float alpha_l;
     uint16_t lux_max;
     uint16_t lux_min;
 } calibration_t;
@@ -439,21 +441,226 @@ void task_EEPROM(void *pvParams)
     }
 }
 
+void set_pwm(float duty, float alpha)
+{
+    //Cargo el slice fisico del pin
+    uint slice_num = pwm_gpio_to_slice_num(PWM_OUT_PIN);
+    //Frec de clock de la pico 2
+    const float clock_freq = 125000000.f;              
+    const float freq = 1000.0;
+    const float divider = clock_freq / (freq * 8192);
+    static float duty_f0 = 0.0;
+    static float duty_f = 0.0;
+
+    //Pongo el pin como pwm
+    gpio_set_function(PWM_OUT_PIN, GPIO_FUNC_PWM);
+    //Calculo con precision de 16 bits de la frec que se quiere--65536        
+    //divider = clock_freq / (freq * 8192);    
+    pwm_set_clkdiv(slice_num, divider);
+    //16 bit de resolucion para el conteo maximo del ciclo de PWM--65535
+    pwm_set_wrap(slice_num, 8191);                 
+    //Calcula el duty cycle--65536
+
+    // Filtro EMA - RESPUESTA DE LA PLANTA
+    duty_f = alpha*duty + (1 - alpha)*duty_f0;
+    duty_f0 = duty_f;
+    
+    // CLAMP
+    if(duty_f > 0.9) duty_f = 0.9;
+    if(duty_f < 0.1) duty_f = 0.1;
+
+    pwm_set_gpio_level(PWM_OUT_PIN, duty_f * 8192);
+    // Habilita el PWM en el pin            
+    pwm_set_enabled(slice_num, true);
+}
+
+void setup_pwm(float duty)
+{
+    //Cargo el slice fisico del pin
+    uint slice_num = pwm_gpio_to_slice_num(PWM_OUT_PIN);
+    //Frec de clock de la pico 2
+    const float clock_freq = 125000000.f;              
+    const float freq = 1000.0;
+    const float divider = clock_freq / (freq * 8192);
+    //static float duty = 0.0;
+    static float duty0 = 0.0;
+    static float duty_f = 0.0;
+
+    //Pongo el pin como pwm
+    gpio_set_function(PWM_OUT_PIN, GPIO_FUNC_PWM);
+    //Calculo con precision de 16 bits de la frec que se quiere--65536        
+    //divider = clock_freq / (freq * 8192);    
+    pwm_set_clkdiv(slice_num, divider);
+    //16 bit de resolucion para el conteo maximo del ciclo de PWM--65535
+    pwm_set_wrap(slice_num, 8191);                 
+    //Calcula el duty cycle--65536
+
+    pwm_set_gpio_level(PWM_OUT_PIN, duty * 8192);
+    // Habilita el PWM en el pin            
+    pwm_set_enabled(slice_num, true);
+}
+
 void autotune(void)
 {
+    qLCD_t lcd;
     // respuesta de lectura de queue
     static BaseType_t rx;
     // comandos de eeprom
     static eeprom_cmd_t ecmd;
     // comando del encoder
-    static char opc;
-
+    char opc;
+    // logica de la funcion
+    char salir;
+    char ajuste_Tu;
+    salir = 0;
+    ajuste_Tu = 1;
+    // contador
+    uint16_t i = 0;
+    // Constantes de filtro de planta
+    static float alpha_r = 0.4;
+    static float alpha_l = 0.1;
+    // Temporizadores
+    TickType_t last_tick;
+    TickType_t ticks;
     //////////////////////////////////
     ///// RUTINA DE AUTOTUNE PID /////
     //////////////////////////////////
-    static float ku = 0.0;
-    static float tu = 0.0;
-    //////////////////////////////////
+    // Medicion
+    static uint16_t lux = 0;
+    // Variables del algoritmo
+    float ku = 0.0;
+    float tu = 1.0;
+    float tu_old = 1.0;
+    uint16_t a = 0;
+    float d = 0.3;
+    // Variables PID
+    float kp = 0.0005;
+    float ti = 5.0;
+    float td = 0.0;
+    // Variables de control
+    float duty;
+    float duty_f0;
+    float duty_f;
+    duty_f0 = 0.0;
+    duty_f = 0.0;
+
+    // Contador de semiperiodo
+    uint32_t n;
+
+    // ALGORITMO
+    while(true){
+        // Reinicio valores de salida y lectura pico
+        a = 0;
+        duty = 0.5;
+        duty_f = 0.5;
+        duty_f0 = 0.5;
+        setup_pwm(1-duty);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        duty = 0.9;
+        // Muestro valor de TU en LCD
+        sprintf(lcd.text, "Tu =");
+        lcd.line = 0;
+        lcd.clear = 1;
+        ///// -> LCD
+        xQueueSend(qLCD, &lcd, portMAX_DELAY);
+        taskYIELD();
+        sprintf(lcd.text, "%3.1f", tu);
+        lcd.line = 1;
+        lcd.clear = 0;
+        ///// -> LCD
+        xQueueSend(qLCD, &lcd, portMAX_DELAY);
+        taskYIELD();
+
+        // ENTRO EN SECCION BAREMETAL
+        // taskENTER_CRITICAL();
+        vTaskResume(tLuxo);
+        /////////////////////////////
+        duty = 0.9;
+        duty_f = alpha_r*duty + (1 - alpha_r)*duty_f0;
+        duty_f0 = duty_f;
+        setup_pwm(1-duty_f);
+        // Cantidad de milisegundos de cada Tu/2
+        n = (uint32_t)(500*tu);
+
+        // Hago 3 periodos de oscilacion
+        for(uint8_t j = 0; j<6; j++){
+            printf("\nDuty = %.1f\n", duty);
+
+            // Reinicio contador de semiperiodo
+            last_tick = xTaskGetTickCount();
+            ticks = 0;
+
+            while(ticks < n){
+                // Leo luxometro
+                rx = xQueueReceive(qLUX, &lux, 0);
+                if(rx == pdPASS) {
+                    // Si es pico, actualizo a
+                    if(lux > a) a = lux;
+                    printf("Lux = %5d \t", lux);
+                    vTaskDelay(pdMS_TO_TICKS(1));
+                    // Saco la cuadrada + filtro de planta
+                    // set_pwm(1-duty, alpha_r);
+                    duty_f = alpha_r*duty + (1 - alpha_r)*duty_f0;
+                    duty_f0 = duty_f;
+                    setup_pwm(1-duty_f);
+                }
+                ticks = xTaskGetTickCount() - last_tick;
+            }
+            //printf("\nLux_pico = %5d", a);
+            // Invierto si llegue al limite del semi periodo
+            if(j%2) duty = 0.9;
+            else duty = 0.1;
+        }
+        // SALGO DE SECCION BAREMETAL
+        // taskEXIT_CRITICAL();
+        vTaskSuspend(tLuxo);
+        /////////////////////////////
+        // Calculo constantes
+        ku = (4*d)/(3.14*a);
+        kp = 0.45*ku;
+        ti = 0.83*tu;
+        /////
+        printf("\nTu = %.2f\ta = %5d\tKu =  %.5f\tKp = %.6f\t Ti = %.3f",
+            tu, a, ku, kp, ti);
+        // CAMBIO TU PARA NUEVO AJUSTE
+        // SI TU = TU_OLD SALGO DEL AUTOTUNE
+        tu_old = tu;
+        ajuste_Tu = 1;
+        while(ajuste_Tu){
+            // Recibo comando del encoder
+            xQueueReceive(qCTRL, &opc, portMAX_DELAY);
+            switch(opc){
+                case 'H':
+                    tu += 0.05;
+                    // Muestro valor de TU en LCD
+                    sprintf(lcd.text, "%3.2f", tu);
+                    lcd.line = 1;
+                    lcd.clear = 0;
+                    ///// -> LCD
+                    xQueueSend(qLCD, &lcd, portMAX_DELAY);
+                    taskYIELD();
+                    break;
+                case 'A':
+                    if(tu > 0.05) tu -= 0.05;
+                    // Muestro valor de TU en LCD
+                    sprintf(lcd.text, "%3.2f", tu);
+                    lcd.line = 1;
+                    lcd.clear = 0;
+                    ///// -> LCD
+                    xQueueSend(qLCD, &lcd, portMAX_DELAY);
+                    taskYIELD();
+                    break;
+                case 'P':
+                    if(tu == tu_old) salir = 1;
+                    ajuste_Tu = 0;
+                    break;
+                default:
+                    break;
+            }
+        }
+        if(salir) break;
+    }
+    //////////////////////////////////  
 }
 
 void log_settings(void)
@@ -506,7 +713,7 @@ void clear_settings(void)
     }
 }
 
-void task_Setear(void *params)
+void task_Config(void *params)
 {
     // respuesta de lectura de queue
     BaseType_t rx;
@@ -522,8 +729,6 @@ void task_Setear(void *params)
     settings_t settings;
     // buffer eeprom
     uint8_t buffer[16];
-    // guardo valor del ultimo registro
-    uint16_t num_log = 0;
     // valores del menu
     menu_t menu[MENU_SIZE] = {
         {"NIVEL LUX:", 100, 0, 5000},
@@ -549,7 +754,7 @@ void task_Setear(void *params)
     // Cargo buffer de prueba
     //settings2bytes(&settings, buffer);
     // Cargo valores iniciales en eeprom (prueba)
-    uint16_t num_registro = 0;
+    
     uint16_t address = 0;
     //vTaskSuspendAll();
     //eeprom_write(buffer, 0, 16);
@@ -563,7 +768,7 @@ void task_Setear(void *params)
             
             // Suspendo tareas
             vTaskSuspend(tControl);
-            //vTaskSuspend(tLuxo);
+            vTaskSuspend(tLuxo);
             // Levanto la config actual de la eeprom
             ecmd = ECTRL_READ_SETTINGS;
             xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
@@ -587,7 +792,6 @@ void task_Setear(void *params)
                             settings.time.sec, settings.setpoint, settings.user_max,
                             settings.user_min, settings.curva);
             // Cargo settings actuales al menu
-            num_registro = settings.index;
             menu[0].valor = settings.setpoint;
             menu[1].valor = settings.user_max;
             menu[2].valor = settings.user_min;
@@ -675,7 +879,7 @@ void task_Setear(void *params)
                     // FUNCIONES ESPECIALES
                     if(indice == 4 && menu[4].valor){
                         // RUTINA DE CALIBRACION
-                        //autotune();
+                        autotune();
                     }
                     else if(indice == 5  && menu[5].valor){
                         // IMPRIMO LOG DE SETTINGS
@@ -718,8 +922,7 @@ void task_Setear(void *params)
             taskYIELD();
             
             // cargo menu actualizado a settings
-            num_registro++;
-            settings.index = num_registro;
+            settings.index++;
             settings.setpoint = menu[0].valor;
             settings.user_max = menu[1].valor;
             settings.user_min = menu[2].valor;
@@ -745,7 +948,7 @@ void task_Setear(void *params)
             xSemaphoreGive(sRefresh);
             // Saco de la suspension a task_Control
             vTaskResume(tControl);
-            //vTaskResume(tLuxo);
+            vTaskResume(tLuxo);
         }
     }   
 }
@@ -770,32 +973,6 @@ void task_BH1750(void *pvParams)
         vTaskDelayUntil(&last_tick, pdMS_TO_TICKS(LUX_TIME));
         //vTaskDelay(pdMS_TO_TICKS(LUX_TIME));
     }
-}
-
-void setup_pwm(float duty)
-{
-    //Cargo el slice fisico del pin
-    uint slice_num = pwm_gpio_to_slice_num(PWM_OUT_PIN);
-    //Frec de clock de la pico 2
-    const float clock_freq = 125000000.f;              
-    const float freq = 1000.0;
-    const float divider = clock_freq / (freq * 8192);
-    //static float duty = 0.0;
-    static float duty0 = 0.0;
-    static float duty_f = 0.0;
-
-    //Pongo el pin como pwm
-    gpio_set_function(PWM_OUT_PIN, GPIO_FUNC_PWM);
-    //Calculo con precision de 16 bits de la frec que se quiere--65536        
-    //divider = clock_freq / (freq * 8192);    
-    pwm_set_clkdiv(slice_num, divider);
-    //16 bit de resolucion para el conteo maximo del ciclo de PWM--65535
-    pwm_set_wrap(slice_num, 8191);                 
-    //Calcula el duty cycle--65536
-
-    pwm_set_gpio_level(PWM_OUT_PIN, duty * 8192);
-    // Habilita el PWM en el pin            
-    pwm_set_enabled(slice_num, true);
 }
 
 void task_Control(void *pvParams)
@@ -834,11 +1011,11 @@ void task_Control(void *pvParams)
     float ai0 = 0.0;
     float error0 = 0.0;
     // filtro de muestra
-    float alpha2 = 0.4;
+    float alpha_m = 0.4;
     float lux_f = 0.0;
-    float lux0 = 0.0;
+    float lux_f0 = 0.0;
     // salida controlador
-    float alpha = 0.7;
+    float alpha_p = 0.7;
     //float alpha_lento = 0.1;
     float duty = 0.5;
     float duty0 = 0.0;
@@ -863,6 +1040,20 @@ void task_Control(void *pvParams)
             //xQueueReceive(qEreadcalib, &calib, portMAX_DELAY);
 
             // Calculo de constantes integral y derivativa
+            if(settings.curva == 0){
+                // PLANTA RAPIDA - PID
+                alpha_p = 0.7;
+                kp = 0.0002;
+                ki = 0.0001;
+                kd = 0.00001;
+            }
+            else {
+                // PLANTA LENTA - PI
+                alpha_p = 0.1;
+                kp = 0.00005;
+                ki = 0.00001;
+                kd = 0.0;
+            }
             //ki = kp/ti;
             //kd = kp*td;
         }
@@ -878,8 +1069,8 @@ void task_Control(void *pvParams)
             //////////////////////////////////////////
 
             // Filtro EMA 2 - Suavizado de muestra
-            lux_f = alpha2*lux + (1 - alpha2)*lux0;
-            lux0 = lux_f;
+            lux_f = alpha_m*lux + (1 - alpha_m)*lux_f0;
+            lux_f0 = lux_f;
 
             // CALCULO DEL ERROR
             error = (float)(settings.setpoint - lux_f);
@@ -909,7 +1100,8 @@ void task_Control(void *pvParams)
             duty = ap + ai + ad;
 
             // Filtro EMA - suavizado de duty
-            duty_f = alpha*duty + (1 - alpha)*duty0;
+            // CONTROLA LA RESPUESTA DE LA PLANTA
+            duty_f = alpha_p*duty + (1 - alpha_p)*duty0;
             duty0 = duty_f;
 
             // CLAMP + ALARMAS
@@ -933,9 +1125,9 @@ void task_Control(void *pvParams)
             // IMPORTANTE: 0 -> MAX / 1 -> MIN
             setup_pwm(1 - duty_f);
 
-            last_tick = tick;
-            tick = xTaskGetTickCount();
-            dif_ticks = tick - last_tick;
+            //last_tick = tick;
+            //tick = xTaskGetTickCount();
+            //dif_ticks = tick - last_tick;
             //printf("\rLUX = %5d\teR = %.2f\tAP = %.3f\tAI = %.3f\tAD = %.3f\tduty = %2.2f\t%4dms", 
             //    lux, 100*eR, ap, ai, ad, duty_f, dif_ticks);
             // printf("\nd_Ticks: %5dms - LUX= %d - duty = %.2f", dif_ticks, lux, duty_f);
@@ -1148,7 +1340,7 @@ int main()
 
     // Creo tareas
     xTaskCreate(task_Control, "Control", 256, NULL, 1, &tControl);
-    xTaskCreate(task_Setear, "Setear", 1024, NULL, 2, &tSetear);
+    xTaskCreate(task_Config, "Setear", 1024, NULL, 2, &tConfig);
     xTaskCreate(task_LedRun, "Run", 128, NULL, 3, NULL);
     xTaskCreate(task_BH1750, "BH1750", 128, NULL, 4, &tLuxo);
     xTaskCreate(task_LCD, "LCD", 128, NULL, 4, NULL);
