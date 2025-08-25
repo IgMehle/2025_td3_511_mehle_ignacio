@@ -70,8 +70,6 @@ QueueHandle_t qEwrite, qEwritecalib, qEread, qEreadcalib, qEdump;
 SemaphoreHandle_t mI2C;
 // Semaforos de control
 SemaphoreHandle_t sRTC, sRefresh, sCalib, sEfull, sEempty;
-// Semaforos counting
-SemaphoreHandle_t sLux_show;
 
 // ITEM DE QUEUE LCD
 typedef struct lcd {
@@ -115,11 +113,13 @@ typedef enum ecmd {
 
 // ESTRUCTURA DE PARAMETROS CALIBRACION
 typedef struct calib {
-    float kp;
-    float ti;
-    float td;
-    //float alpha_r;
-    //float alpha_l;
+    float kp_r;
+    float ti_r;
+    float td_r;
+    float alpha_r;
+    float kp_l;
+    float ti_l;
+    float alpha_l;
     uint16_t lux_max;
     uint16_t lux_min;
 } calibration_t;
@@ -131,14 +131,14 @@ typedef struct dumpreq {
     uint16_t length;
 } eepromDumpRequest_t;
 
-typedef struct lut {
-    float duty;
-    uint8_t lux;
-} lut_t;
+// typedef struct lut {
+//     float duty;
+//     uint8_t lux;
+// } lut_t;
 
-volatile uint8_t toggle = 0;
-volatile uint8_t toggle2 = 0;
-lut_t lut[101];
+//volatile uint8_t toggle = 0;
+//volatile uint8_t toggle2 = 0;
+//lut_t lut[101];
 
 void settings2bytes(settings_t *settings, uint8_t *bytes)
 {
@@ -328,6 +328,7 @@ void task_EEPROM(void *pvParams)
                 if(xQueueReceive(qEwrite, &settings, portMAX_DELAY) == pdPASS){
                     // Incremento index para agregar un nuevo registro
                     index++;
+                    settings.index = index;
                     printf("\nRegistro N: %d\n", index);
                     // Calculo address
                     address = index*EEPROM_DATA_SIZE + EEPROM_DATA_BASE;
@@ -339,7 +340,6 @@ void task_EEPROM(void *pvParams)
                         eeprom_write(bf, address, EEPROM_DATA_SIZE);
                         // delay de escritura de eeprom
                         vTaskDelay(pdMS_TO_TICKS(5));
-                        //eeprom_write(settings, address, EEPROM_DATA_SIZE);
                         xSemaphoreGive(mI2C);
                     }
                 }   
@@ -351,8 +351,7 @@ void task_EEPROM(void *pvParams)
                 // Intento tomar el bus
                 if(xSemaphoreTake(mI2C, portMAX_DELAY) == pdPASS){
                     // Leo el ultimo registro de la eeprom
-                    eeprom_read(bf, address, 16);
-                    // eeprom_read(settings, address, 16);
+                    eeprom_read(bf, address, 16);;
                     xSemaphoreGive(mI2C);
                 }
                 // Empaqueto
@@ -367,7 +366,7 @@ void task_EEPROM(void *pvParams)
                     // Intento tomar el bus
                     if(xSemaphoreTake(mI2C, portMAX_DELAY) == pdPASS){
                         // Escribo parametros de calibracion en la eeprom
-                        //eeprom_write(calib, 0x0000, 16);
+                        //eeprom_write(calib, 0x0000, 132);
                         // delay de escritura de eeprom
                         vTaskDelay(pdMS_TO_TICKS(5));
                         xSemaphoreGive(mI2C);
@@ -379,7 +378,7 @@ void task_EEPROM(void *pvParams)
                 // Intento tomar el bus
                 if(xSemaphoreTake(mI2C, portMAX_DELAY) == pdPASS){
                     // Leo parametros de calibracion de la eeprom
-                    //eeprom_read(calib, 0x0000, 16);
+                    //eeprom_read(calib, 0x0000, 32);
                     xSemaphoreGive(mI2C);
                 }
                 // Mando a la cola de lectura de parametros del pid
@@ -388,11 +387,12 @@ void task_EEPROM(void *pvParams)
 
             case ECTRL_DUMP:
                 ////////////////////////////////////////////////////////
-                eeprom_read(bf, 0x0000, 16);
-                memcpy(&calib, bf, sizeof(calibration_t));
-                printf("\r\nKP= %f - KI= %f - KD= %f - LUXMAX= %d - luxmin= %d",
-                    calib.kp, calib.ti, calib.td, calib.lux_max, calib.lux_min);
-                fflush(stdout);
+                // IMPRESION DE PARAETROS DE CALIBRACION PARA DEBUG
+                // eeprom_read(bf, 0x0000, 16);
+                // memcpy(&calib, bf, sizeof(calibration_t));
+                // printf("\r\nKP= %f - KI= %f - KD= %f - LUXMAX= %d - luxmin= %d",
+                //     calib.kp, calib.ti, calib.td, calib.lux_max, calib.lux_min);
+                // fflush(stdout);
                 // Paso el numero de items en memoria
                 //dump_q.length = index;
                 dump_q.length = DUMP_SIZE;
@@ -439,39 +439,6 @@ void task_EEPROM(void *pvParams)
             }
         }
     }
-}
-
-void set_pwm(float duty, float alpha)
-{
-    //Cargo el slice fisico del pin
-    uint slice_num = pwm_gpio_to_slice_num(PWM_OUT_PIN);
-    //Frec de clock de la pico 2
-    const float clock_freq = 125000000.f;              
-    const float freq = 1000.0;
-    const float divider = clock_freq / (freq * 8192);
-    static float duty_f0 = 0.0;
-    static float duty_f = 0.0;
-
-    //Pongo el pin como pwm
-    gpio_set_function(PWM_OUT_PIN, GPIO_FUNC_PWM);
-    //Calculo con precision de 16 bits de la frec que se quiere--65536        
-    //divider = clock_freq / (freq * 8192);    
-    pwm_set_clkdiv(slice_num, divider);
-    //16 bit de resolucion para el conteo maximo del ciclo de PWM--65535
-    pwm_set_wrap(slice_num, 8191);                 
-    //Calcula el duty cycle--65536
-
-    // Filtro EMA - RESPUESTA DE LA PLANTA
-    duty_f = alpha*duty + (1 - alpha)*duty_f0;
-    duty_f0 = duty_f;
-    
-    // CLAMP
-    if(duty_f > 0.9) duty_f = 0.9;
-    if(duty_f < 0.1) duty_f = 0.1;
-
-    pwm_set_gpio_level(PWM_OUT_PIN, duty_f * 8192);
-    // Habilita el PWM en el pin            
-    pwm_set_enabled(slice_num, true);
 }
 
 void setup_pwm(float duty)
@@ -746,20 +713,6 @@ void task_Config(void *params)
     // mostrar nuevo item
     uint8_t show_menu;
 
-    // Valores de prueba de menu y encoder
-    //settings.lux = menu[0].valor;
-    //settings.user_max = menu[1].valor;
-    //settings.user_min = menu[2].valor;
-    //settings.curva = (uint8_t) menu[3].valor;
-    // Cargo buffer de prueba
-    //settings2bytes(&settings, buffer);
-    // Cargo valores iniciales en eeprom (prueba)
-    
-    uint16_t address = 0;
-    //vTaskSuspendAll();
-    //eeprom_write(buffer, 0, 16);
-    //xTaskResumeAll();
-
     while(1){
         // Si toco el pulsador entro en el menu de configuracion
         rx = xQueueReceive(qCTRL, &opc, portMAX_DELAY);
@@ -775,16 +728,7 @@ void task_Config(void *params)
             // Cambio de contexto para leer
             taskYIELD();
             // settings <- EEPROM
-            //xQueueReceive(qEread, buffer, portMAX_DELAY);
             xQueueReceive(qEread, &settings, portMAX_DELAY);
-            ////// PRUEBA DE EEPROM
-            //vTaskSuspendAll();
-            //eeprom_read(buffer, address, 16);
-            //xTaskResumeAll();
-            //for(uint8_t i=0; i<16; i++) printf("%x ", buffer[i]);
-            //printf("\n");
-            // Desempaqueto
-            //bytes2settings(&settings, buffer);
             // Imprimo lectura
             printf("\n%d: (%02d/%02d %02d:%02d:%02d) Lux: %d, Max: %d, Min: %d, Curva: %d",
                             settings.index, settings.time.day, settings.time.month,
@@ -922,31 +866,24 @@ void task_Config(void *params)
             taskYIELD();
             
             // cargo menu actualizado a settings
-            settings.index++;
+            // settings.index se actualiza en task_EEPROM() - WRITE_SETTINGS
             settings.setpoint = menu[0].valor;
             settings.user_max = menu[1].valor;
             settings.user_min = menu[2].valor;
             settings.curva = (uint8_t) menu[3].valor;
 
-            //address = num_registro*EEPROM_DATA_SIZE;
-            // Empaqueto settings
-            //settings2bytes(&settings, buffer);
+            
             // settings -> EEPROM
-            //xQueueSend(qEwrite, buffer, portMAX_DELAY);
             xQueueSend(qEwrite, &settings, portMAX_DELAY);
             ecmd = ECTRL_WRITE_SETTINGS;
             xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
             taskYIELD();
-            ///// PRUEBA DE EEPROM
-            //vTaskSuspendAll();
-            //eeprom_write(buffer, address, 16);
-            //xTaskResumeAll();
 
             // DELAY 1SEG
             vTaskDelay(pdMS_TO_TICKS(1000));
             // Doy la orden a task_Control para que refresque los datos
             xSemaphoreGive(sRefresh);
-            // Saco de la suspension a task_Control
+            // Saco de la suspension a task_Control Y task del luxometro
             vTaskResume(tControl);
             vTaskResume(tLuxo);
         }
@@ -971,7 +908,6 @@ void task_BH1750(void *pvParams)
         }
         // Corre cada LUX_TIME
         vTaskDelayUntil(&last_tick, pdMS_TO_TICKS(LUX_TIME));
-        //vTaskDelay(pdMS_TO_TICKS(LUX_TIME));
     }
 }
 
@@ -994,11 +930,9 @@ void task_Control(void *pvParams)
     float ts = (float) LUX_TIME;
     // constantes pid
     float kp = 0.0002;
-    // float kp_lento = 0.00005;
     //float ti = 5.0;
     //float td = 0.0;
     float ki = 0.0001;
-    //float ki_lento = 0.00001;
     float kd = 0.00001;
     // acciones pid
     float ap = 0.0;
@@ -1016,12 +950,10 @@ void task_Control(void *pvParams)
     float lux_f0 = 0.0;
     // salida controlador
     float alpha_p = 0.7;
-    //float alpha_lento = 0.1;
     float duty = 0.5;
     float duty0 = 0.0;
     float duty_f = 0.0;
     ///////////////////////////
-    uint16_t setpoint = 1000;
     TickType_t last_tick = xTaskGetTickCount();
     TickType_t tick;
     TickType_t dif_ticks;
@@ -1040,6 +972,7 @@ void task_Control(void *pvParams)
             //xQueueReceive(qEreadcalib, &calib, portMAX_DELAY);
 
             // Calculo de constantes integral y derivativa
+            // Sin autotune() se adoptan constantes empiricas
             if(settings.curva == 0){
                 // PLANTA RAPIDA - PID
                 alpha_p = 0.7;
@@ -1058,7 +991,7 @@ void task_Control(void *pvParams)
             //kd = kp*td;
         }
         // Hay lectura del luxometro ?
-        // No lo hago bloqueante para que pueda imprimir dentro del tiempo de medicion
+        // No lo hacemos bloqueante para que pueda imprimir dentro del tiempo de medicion
         if(xQueueReceive(qLUX, &lux, 0) == pdPASS){
             //////////////////////////////////////////
             ///// CONTROL PID ////////////////////////
@@ -1180,8 +1113,8 @@ void task_LedRun(void *pvParams)
         gpio_put(LED_RUN_PIN, false);
         vTaskDelay(pdMS_TO_TICKS(500));
         // PPS
-        if(toggle) toggle = 0;
-        else toggle = 1;
+        // if(toggle) toggle = 0;
+        // else toggle = 1;
     }
 }
 
@@ -1222,18 +1155,6 @@ int main()
     lcd_clear();
 
     // Inicializo BH1750
-    // bh1750_init(CONT_LORES);
-
-    // float d;
-    // // Lleno tabla lut
-    // for(uint8_t n=0; n<101; n++){
-    //     d = (float) n/100;
-    //     setup_pwm(d);
-    //     sleep_ms(25);
-    //     lut[n].duty = d;
-    //     lut[n].lux = bh1750_read();
-    // }
-
     bh1750_init(ONESHOT_LORES);
 
     // Inicializo DS3231
@@ -1248,12 +1169,12 @@ int main()
     rtc_load(init);
 
     // Escribo EEPROM
-    uint8_t data[16];
+    uint8_t data[32];
     settings_t settings;
     settings.index = 0;
     settings.setpoint = 1000;
-    settings.user_max = 1500;
-    settings.user_min = 500;
+    settings.user_max = 1100;
+    settings.user_min = 900;
     settings.curva = 0;
     settings.time = init;
     settings2bytes(&settings, data);
@@ -1261,13 +1182,15 @@ int main()
     sleep_ms(10);
 
     calibration_t calib;
-    calib.kp = 0.0005;
-    calib.ti = 5.0;
-    calib.td = 0.0;
+    calib.kp_r = 0.0005;
+    calib.ti_r = 5.0;
+    calib.td_r = 0.1;
+    calib.kp_l = 0;
+    calib.ti_l = 0;
     calib.lux_max = 5000;
     calib.lux_min = 1;
     memcpy(data, &calib, sizeof(calibration_t));
-    eeprom_write(data, 0x0000, 16);
+    eeprom_write(data, 0x0000, 32);
     sleep_ms(10);
 
     // Init LED RUN
@@ -1310,9 +1233,6 @@ int main()
 
     vSemaphoreCreateBinary(sEfull);
     vSemaphoreCreateBinary(sEempty);
-
-    // Creo semaforos counting y los libero
-    sLux_show = xSemaphoreCreateCounting(10, 0);
     
     // Creo mutex y lo libero
     mI2C = xSemaphoreCreateMutex();
