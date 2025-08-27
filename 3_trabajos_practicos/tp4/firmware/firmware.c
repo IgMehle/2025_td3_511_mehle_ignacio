@@ -1,237 +1,195 @@
 #include <stdio.h>
-#include <math.h>
 #include "pico/stdlib.h"
-// HEADERS PERIFERICOS
-#include "hardware/i2c.h"
-#include "hardware/gpio.h"
-#include "hardware/pwm.h"
 
-// HEADERS MODULOS
-#include "bmp280.h"
-#include "lcd.h"
-// HEADERS FREERTOS
 #include "FreeRTOS.h"
 #include "task.h"
-#include "queue.h"
 #include "semphr.h"
+#include "queue.h"
 
-//----- PINOUT ----- //
-#define BUTTON_PIN  17
-#define LED_PWM_PIN 16
-#define I2C_SDA_PIN 4
-#define I2C_SCL_PIN 5
-#define LED_RUN     25
+#include "helper.h"   //libreria para PWM
+#include "lcd.h"      //libreria de LCD
+#include "bmp280.h"   //libreria del sensor de presion y temperatura BMP280
 
-// Parametros de compensacion del BMP280
-struct bmp280_calib_param params_bmp;
+#define I2C_PORT i2c0
+#define I2C_SDA  8          //PIN 11-GPIO8
+#define I2C_SCL  9          //PIN 12-GPIO9
+#define ADDR_LCD     0x27    // Direccion de 7 bits del adaptador del LCD
+#define SETPOINT 19       //Se agrega SETPOINT
 
-// Struct de la cola del LCD
+#define PIN_BOTON 15        //PIN 20 COMO ENTRADA
+#define PIN_LED 16         //PIN 20 COMO SALIDA PWM
+
+/*Handlers de las tareas*/ //Se agrega para V2 
+TaskHandle_t handle_Task_BMP280 = NULL;
+TaskHandle_t handle_Task_LCD = NULL;
+TaskHandle_t handle_Task_LED = NULL;
+
+SemaphoreHandle_t Mutex_I2C;        //Handler del semaforo mutex para el I2C
+QueueHandle_t Queue_data;           // Handler de la cola
+QueueHandle_t Queue_page;           //Se agrega para V2
+
+//Estructura para manejo de los datos del sensor
 typedef struct {
-    float temperatura;
-    int32_t presion;
-} q_lcd_t;
+    float temp;
+    float presion;
+} datasensor_t;
 
-// Struct de la funcion de calculo de pwm y error
-typedef struct {
-    uint16_t brillo;
-    float error;
-} pwm_t;
+datasensor_t datos_bmp;     //Estructura de datos para la calibracion del sensor y calculos
 
-// Handle mutex I2C
-SemaphoreHandle_t sm_i2c;
-// Handle queue LCD
-QueueHandle_t q_lcd;
-// Handle semaforo IRQ pulsador
-SemaphoreHandle_t s_puls;
-// Handle queue cambio de pantalla
-QueueHandle_t q_screen;
+//variable auxiliar //Se agrega para V2
+bool change_page = false;
 
-//----- IRQ PULSADOR -----//
-void puls_irq(uint gpio, uint32_t event_mask)
-{
-    static BaseType_t wake_hp_task = pdTRUE;
-    static uint8_t lcd_screen = 0;
-
-    if(lcd_screen == 0) lcd_screen = 1;
-    else lcd_screen = 0;
-
-    //irq_clear(GPIO_IRQ_EDGE_FALL);
-    // Envio indicacion de que pantalla tengo que mostrar
-    xQueueSendFromISR(q_screen, &lcd_screen, &wake_hp_task);
-}
-
-pwm_t led_pwm(float temperatura, float setpoint){
-    static int fade;
-    float error;
-    pwm_t result;
-    // Calculo el error absoluto
-    error = temperatura - setpoint;
-    // Tomo valor absoluto
-    if(error < 0.0) error = -error;
-    // Calculo error relativo * 2,55
-    fade = (int)(255.0 * error / setpoint);
-    // Limito fade a 255
-    if(fade > 255) fade = 255;
-    // Devuelvo valor real de PWM
-    // El PWM esta configurado en 16 bits
-    // Se calcula el PWM de manera cuadratica
-    // Para obtener una variacion de brillo mas lineal
-    // Fuente: github.com/raspberrypi/pico-examples/pwm/led_fade
-    result.brillo = (uint16_t)(fade*fade);
-    result.error = error;
-    return result;
-}
-
-static void task_BMP280(void *pvParams)
-{
-    q_lcd_t bf;
-    int32_t raw_temp, raw_press;
-    int brillo;
-
-    while(1){
-        // Intento tomar el Mutex para usar el bus I2C
-        if(xSemaphoreTake(sm_i2c, portMAX_DELAY) == pdPASS){
-            // Leo valores en crudo de temperatura y presion
-            bmp280_read_raw(&raw_temp, &raw_press);
-            //printf("Leo BMP280\n");
-            // Devuelvo el Mutex
-            xSemaphoreGive(sm_i2c);
-            // Convierto valores y guardo en el buffer
-            bf.temperatura = bmp280_convert_temp(raw_temp, &params_bmp);
-            bf.presion = bmp280_convert_pressure(raw_press, raw_temp, &params_bmp);
-            // Envio datos a la cola del lcd
-            xQueueSend(q_lcd, &bf, portMAX_DELAY);
-        };
-        // Levanto datos cada 200ms
-        vTaskDelay(pdMS_TO_TICKS(200));
+/*interrupcion que se ejecuta al presionar el boton, por flanco descendente, modificando un dato de cola
+ que cambiara la pagina a mostrar en el lcd, */
+void gpio_callback(uint gpio, uint32_t events) {
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    bool page;
+    if (gpio == PIN_BOTON && (events & GPIO_IRQ_EDGE_FALL)) {
+        xQueuePeekFromISR(Queue_page, &page);
+        page = !page;
+        change_page = true;
+        sleep_ms(200);
+        xQueueOverwriteFromISR(Queue_page, &page, &xHigherPriorityTaskWoken);
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
     }
 }
 
-static void task_LCD(void *pvParams)
+//TAREA LECTURA SENSOR TEMPERATURA Y PRESION
+void task_BMP280(void *params)
 {
-    q_lcd_t bf;
-    char line0[16], line1[16];
-    pwm_t pwm;
-    uint8_t screen;
-    float setpoint = 25.0;
+    // Obtiene los parámetros de calibración
+    struct bmp280_calib_param struct_calib_params;
+    xSemaphoreTake(Mutex_I2C ,portMAX_DELAY);         //Toma el semaforo para que ningun otra tarea pueda utilizar el bus I2C
+    bmp280_get_calib_params(&struct_calib_params);    //obtiene los parámetros de calibracion del sensor
+    xSemaphoreGive(Mutex_I2C);                        //Devuelve el semaforo I2C
 
-    while(1){
-        if(xQueueReceive(q_lcd, &bf, portMAX_DELAY) == pdPASS){
-            // Calculo PWM del led de error
-            pwm = led_pwm(bf.temperatura, setpoint);
-            // Reviso que pantalla muestro
-            xQueuePeek(q_screen, &screen, 0);
-            if(screen){
-                // Formateo los datos para mostrar en LCD
-                sprintf(line0, "Setpoint: %.1fC", setpoint);
-                sprintf(line1, "Error: %.2f", pwm.error);
-            }
-            else {
-                // Formateo los datos para mostrar en LCD
-                sprintf(line0, "Temp: %.1fC", bf.temperatura);
-                sprintf(line1, "Presion: %4dhPa", bf.presion);
-            }
-            // Intento tomar el mutex del bus I2C
-            if(xSemaphoreTake(sm_i2c, portMAX_DELAY) == pdPASS){
-                // Imprimo ambas lineas del LCD
-                lcd_clear();
-                lcd_set_cursor(0, 0);
-                lcd_string(line0);
-                lcd_set_cursor(1, 0);
-                lcd_string(line1);
-                printf("%s %s\n",line0, line1);
-                // Devuelvo el mutex
-                xSemaphoreGive(sm_i2c);
-            }
-            // Actualizo PWM led de error
-            pwm_set_gpio_level(LED_PWM_PIN, pwm.brillo);
+    while (1){
+        int32_t raw_temp, raw_presion;
+        xSemaphoreTake(Mutex_I2C ,portMAX_DELAY);     //vuelve a tomar el semaforo ahora para obtener los datos RAW del sensor
+        bmp280_read_raw(&raw_temp, &raw_presion);     //Obtiene ambos valores sin compensar
+        xSemaphoreGive(Mutex_I2C);                    //Devuelve semaforo
+
+        datos_bmp.temp =    bmp280_convert_temp(raw_temp, &struct_calib_params);                           // Convierte temperatura
+        datos_bmp.presion = bmp280_convert_pressure(raw_presion, raw_temp, &struct_calib_params) / 100.00; // Convierte presion
+        
+        printf("Temperatura: %.2f °C \nPresion: %.2f hPa\n", datos_bmp.temp, datos_bmp.presion);  //Imprime datos por consola serial para debuggear
+
+        xQueueOverwrite(Queue_data, &datos_bmp);    //Sobreescribe datos del sensor en cola para escribir en el LCD.
+
+        vTaskDelay(pdMS_TO_TICKS(500));         //Delay de 100ms hasta proxima lectura
+    }
+}
+
+//RECIBO DE DATOS DE LA COLA E IMPRESIÓN EN EL LCD
+void task_LCD(void *params)
+{
+    datasensor_t datos_LCD;
+    bool page;  //Se agrega
+    // Variable para imprimir el mensaje
+    char str[16];
+    float error_prueba;
+
+    while (1){
+        xQueuePeek(Queue_data, &datos_LCD, portMAX_DELAY);         //Copia Queue_data en datos_LCD
+        xSemaphoreTake(Mutex_I2C ,portMAX_DELAY);                  //Toma el semaforo mutex para poder imprimir en LCD y no ser interrumpido por lectura de datos del sensor
+        xQueuePeek(Queue_page, &page, portMAX_DELAY);              //hago peek de numero de pagina a imprimir
+
+         if(change_page){   //verifico si es necesario un borrado de pantalla
+            lcd_clear(); 
+            change_page = false;
         }
+        if(!page){
+            lcd_set_cursor(0, 0);
+            sprintf(str, "Temp: %.2f C", datos_LCD.temp);
+            lcd_string(str);                                            
+            lcd_set_cursor(1, 0);
+            sprintf(str,"Pres: %.1f hPa", datos_LCD.presion);
+            lcd_string(str);
+            printf("ESTOY ACA 1\n");                      //Mensaje de DEBUG.
+        }
+        else{                                           //imprimo datos de TEMP, SETPOINT Y ERROR  en la segunda pagina del DISPLAY LCD
+            lcd_set_cursor(0, 0);                                      
+            sprintf(str, "Temp: %.2f C", datos_LCD.temp);
+            lcd_string(str);
+            lcd_set_cursor(1, 0);
+            sprintf(str, "SetPoint: %.2f C", SETPOINT);
+            lcd_string(str);
+            // Muevo el cursor al comienzo de la segunda fila
+            lcd_set_cursor(2, 0);
+            // Imprimo el mensaje
+            error_prueba = datos_LCD.temp-SETPOINT; if (error_prueba < 0 ) error_prueba = - error_prueba;  //obtengo valor absoluto del error
+            sprintf(str,"Error: %.2f C", error_prueba);
+            lcd_string(str);
+            printf("ESTOY ACA 0\n");                      //Mensaje de DEBUG.
+        } 
+        
+        xSemaphoreGive(Mutex_I2C);                 //Devuelve semaforo mutex I2C para libre utilizacion del sensor, si fuese necesario
+        vTaskDelay(pdMS_TO_TICKS(500));             //demora de 100ms hasta proxima secuencia de impresion
+    }
+
+}
+
+//tarea de encendido de LED mediante el uso de PWM
+void task_LED(void *params){
+    datasensor_t datos_LCD;
+    float error_prueba;
+    uint16_t pwm_duty;
+    
+    while(1){    
+        xQueuePeek(Queue_data, &datos_LCD, portMAX_DELAY);         //hago peek de los datos de sensor (solo utilizo la TEMP)
+        error_prueba = datos_LCD.temp-SETPOINT;                     //calculo ERROR
+        if (error_prueba < 0 ) error_prueba = - error_prueba;       //obtengo valor absoluto del ERROR
+        pwm_duty = (uint16_t)(error_prueba * 100.0 / 5.0);          //hago escalado de ERROR -> PWM ------ (0 - 5 °C) -> (0 - 100) 
+        if(pwm_duty > 100) pwm_duty = 100;                          //limito maximo dutycicle a 100
+        if(pwm_duty < 0 ) pwm_duty = 0;                             //limito minimo dutycicle a 0 
+        pwm_set_gpio_level(PIN_LED, pwm_duty);                      //establezco dutycicle del PWM
+        vTaskDelay(pdMS_TO_TICKS(100));                             //demora de 100ms hasta proxima actualizacion del LED
     }
 }
 
-static void task_Run(void *pvParams)
-{
-    while(1){
-        gpio_put(LED_RUN, true);
-        vTaskDelay(pdMS_TO_TICKS(500));
-        gpio_put(LED_RUN, false);
-        vTaskDelay(pdMS_TO_TICKS(500));
-    }
-}
 
-int main()
-{
+int main(){
+
     stdio_init_all();
 
-    // Init led de run
-    gpio_init(LED_RUN);
-    gpio_set_dir(LED_RUN, true);
+     // Generador de PWM para encender el LED
+    pwm_user_init(PIN_LED, 10000);
 
-    //----- config GPIO -----//
-    // INIT GPIO INPUT PIN
-    gpio_init(BUTTON_PIN);
-    // GPIO como entrada
-    gpio_set_dir(BUTTON_PIN, false);
-    // Set pulldown
-    gpio_set_pulls(BUTTON_PIN, true, false);
-    // Habilito la IRQ del pin
-    //gpio_set_irq_enabled_with_callback(BUTTON_PIN, GPIO_IRQ_EDGE_FALL, true, &puls_irq);
+    //creacion del semaforo mutex
+    Mutex_I2C = xSemaphoreCreateMutex();
+
+     //Creacion de la cola que enviara datos de Task_BMP280 a Task_LCD
+    Queue_data = xQueueCreate(1, sizeof(datasensor_t));
+
+    /*Se agrega*/
+    bool page_number = 0;
+    Queue_page = xQueueCreate(1, sizeof(bool));
+    xQueueOverwrite(Queue_page, &page_number);
+
+    i2c_init(I2C_PORT, 400*1000);                   // Inicializo el I2C con un clock de 400 KHz
+    gpio_set_function(I2C_SDA, GPIO_FUNC_I2C);      // Habilito la funcion de I2C en los GPIOs
+    gpio_set_function(I2C_SCL, GPIO_FUNC_I2C);
+    gpio_pull_up(I2C_SDA);                          // Habilito pull-ups
+    gpio_pull_up(I2C_SCL);
     
-    //----- config PWM -----//
-    // Asigno salida PWM al LED
-    gpio_set_function(LED_PWM_PIN, GPIO_FUNC_PWM);
-    // Guardar que slice de PWM le corresponde al pin
-    uint slice_num = pwm_gpio_to_slice_num(LED_PWM_PIN);
-    // Get some sensible defaults for the slice configuration. By default, the
-    // counter is allowed to wrap over its maximum range (0 to 2**16-1)
-    pwm_config config = pwm_get_default_config();
-    // Set divider, reduces counter clock to sysclock/this value
-    pwm_config_set_clkdiv(&config, 4.f);
-    // Load the configuration into our PWM slice, and set it running.
-    pwm_init(slice_num, &config, true);
+    lcd_init(I2C_PORT, ADDR_LCD);                   // Inicializo LCD
+    lcd_clear();  
 
+    bmp280_init(i2c0);                              // Inicializa el BMP280 usando el I2C0
 
-    //----- config I2C -----//
-    // I2C1 a 100khz
-    i2c_init(i2c0, 100000);
-    // I2C1_SDA en GPIO18
-    gpio_set_function(I2C_SDA_PIN, GPIO_FUNC_I2C);
-    // I2C1_SCL en GPIO19
-    gpio_set_function(I2C_SCL_PIN, GPIO_FUNC_I2C);
-    // Pongo pullups a 3V3
-    gpio_pull_up(I2C_SDA_PIN);
-    gpio_pull_up(I2C_SCL_PIN);
+    gpio_init(PIN_BOTON);
+    gpio_set_dir(PIN_BOTON, false);
+    //gpio_pull_up(PIN_BOTON);
 
-    // ----- config BMP280 -----//
-    // Inicializa el BMP280 usando el I2C1
-    bmp280_init(i2c0);
-    // Obtiene parámetros de compensación
-    struct bmp280_calib_param params_bmp;
-    bmp280_get_calib_params(&params_bmp);
+    xTaskCreate(task_BMP280, "Task_BMP280", 4*configMINIMAL_STACK_SIZE, NULL, 1, NULL);
+    xTaskCreate(task_LCD, "Task_LCD", 4*configMINIMAL_STACK_SIZE, NULL, 1, NULL);
+    xTaskCreate(task_LCD, "Task_LCD", 4*configMINIMAL_STACK_SIZE, NULL, 1, NULL);
 
-    // Inicializo LCD
-    lcd_init(i2c0, 0x27);
-    lcd_clear();
+    //Habilito las interrupcion del pulsador po flanco ascendente
+    gpio_set_irq_enabled_with_callback(PIN_BOTON, GPIO_IRQ_EDGE_FALL, true, &gpio_callback);
 
-    // Creo mutex para el bus I2C y lo libero
-    sm_i2c = xSemaphoreCreateMutex();
-    xSemaphoreGive(sm_i2c);
-    // Creo queue para el LCD
-    q_lcd = xQueueCreate(1, sizeof(q_lcd_t));
-    // Creo semaforo binario para el pulsador y lo libero
-    s_puls = xSemaphoreCreateBinary();
-    xSemaphoreGive(s_puls);
-    // Creo cola para cambio de pantalla con el pulsador
-    q_screen = xQueueCreate(1, sizeof(uint8_t));
-
-    // Creo tarea BMP280
-    xTaskCreate(task_BMP280, "BMP280", 2*configMINIMAL_STACK_SIZE, NULL, 3, NULL);
-    // Creo tarea LCD
-    xTaskCreate(task_LCD, "LCD", 2*configMINIMAL_STACK_SIZE, NULL, 2, NULL);
-    // Creo tarea RUN
-    xTaskCreate(task_Run, "RUN", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
-
-    // START SCHEDULER
+    // Arranca el scheduler
     vTaskStartScheduler();
-    while(true);
+
+    while (true);
 }

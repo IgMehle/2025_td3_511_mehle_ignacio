@@ -44,23 +44,22 @@ pico_set_program_version(firmware "0.1")
 pico_enable_stdio_uart(firmware 0)
 pico_enable_stdio_usb(firmware 1)
 
-# Add external FreeRTOS library
+# Añadir la subcarpeta donde está la biblioteca FreeRTOS
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../freertos ${CMAKE_BINARY_DIR}/freertos)
-# Añadir la subcarpeta donde está la biblioteca BMP280
-add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../bmp280 ${CMAKE_BINARY_DIR}/bmp280)
 # Añadir la subcarpeta donde está la biblioteca LCD
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../lcd ${CMAKE_BINARY_DIR}/lcd)
+# Añadir la subcarpeta donde está la biblioteca BMP280
+add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../bmp280 ${CMAKE_BINARY_DIR}/bmp280)
+# Añadir la subcarpeta donde está la biblioteca BMP280
+add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../helper ${CMAKE_BINARY_DIR}/helper)
 
 # Add the standard library to the build
 target_link_libraries(firmware
         pico_stdlib
-        hardware_i2c
-        hardware_gpio
-        hardware_pwm
         freertos
-        bmp280
         lcd
-        )
+        helper
+        bmp280)
 
 # Add the standard include files to the build
 target_include_directories(firmware PRIVATE
