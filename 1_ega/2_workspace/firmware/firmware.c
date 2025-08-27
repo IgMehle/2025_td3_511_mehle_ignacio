@@ -41,7 +41,7 @@
 #define EEPROM_DATA_BASE    0x20
 #define EEPROM_DATA_SIZE    0x10
 
-#define DUMP_SIZE       15
+#define DUMP_SIZE       20
 
 #define PULS_RISE       1
 #define ENC_A_RISE      2
@@ -387,7 +387,7 @@ void task_EEPROM(void *pvParams)
 
             case ECTRL_DUMP:
                 ////////////////////////////////////////////////////////
-                // IMPRESION DE PARAETROS DE CALIBRACION PARA DEBUG
+                // IMPRESION DE PARAMETROS DE CALIBRACION PARA DEBUG
                 // eeprom_read(bf, 0x0000, 16);
                 // memcpy(&calib, bf, sizeof(calibration_t));
                 // printf("\r\nKP= %f - KI= %f - KD= %f - LUXMAX= %d - luxmin= %d",
@@ -399,14 +399,19 @@ void task_EEPROM(void *pvParams)
                 // creo cola de volcado
                 //dump_q.responseQueue = xQueueCreate(index, 16U);
                 dump_q.responseQueue = xQueueCreate(DUMP_SIZE, 16U);
-                // apunto al inicio de los settings
+                // apunto al inicio de los settings de usuario
                 ptr = EEPROM_DATA_BASE;
+                //ptr = EEPROM_DATA_BASE + EEPROM_DATA_SIZE;
                 // apunto al final de los settings
-                //end = (index) * EEPROM_DATA_SIZE + EEPROM_DATA_BASE;
+                //end = (index) * EEPROM_DATA_SIZE + ptr;
                 end = DUMP_SIZE * EEPROM_DATA_SIZE + EEPROM_DATA_BASE;
                 while (ptr < end) {
-                    // leo datos y encolo
-                    eeprom_read(bf, ptr, 16);
+                    // Intento tomar el bus
+                    if(xSemaphoreTake(mI2C, portMAX_DELAY) == pdPASS){
+                        // leo datos y encolo
+                        eeprom_read(bf, ptr, 16);
+                        xSemaphoreGive(mI2C);
+                    }
                     bytes2settings(&settings, bf);
                     if(xQueueSend(dump_q.responseQueue, &settings, portMAX_DELAY)==pdPASS){
                         ptr += EEPROM_DATA_SIZE;
@@ -425,7 +430,11 @@ void task_EEPROM(void *pvParams)
                 //end = index * EEPROM_DATA_SIZE + ptr;
                 end = DUMP_SIZE * EEPROM_DATA_SIZE + EEPROM_DATA_BASE;
                 while (ptr < end) {
-                    eeprom_write(bf, ptr, 16);
+                    // Intento tomar el bus
+                    if(xSemaphoreTake(mI2C, portMAX_DELAY) == pdPASS){
+                        eeprom_write(bf, ptr, 16);
+                        xSemaphoreGive(mI2C);
+                    }
                     // delay de escritura de eeprom
                     vTaskDelay(pdMS_TO_TICKS(10));
                     ptr += EEPROM_DATA_SIZE;
@@ -767,7 +776,7 @@ void task_Config(void *params)
                     lcd.clear = 0;
                     //sprintf(lcd.text, "%6d", menu[indice].valor);
                     if(indice < 3) sprintf(lcd.text, "%6d", menu[indice].valor);
-                    else if(indice == 3) sprintf(lcd.text, " LENTA");
+                    else if(indice == 3) sprintf(lcd.text, "RAPIDA");
                     else sprintf(lcd.text, "    NO");
 
                     ///// -> LCD
@@ -919,6 +928,7 @@ void task_Control(void *pvParams)
     settings_t settings;
     calibration_t calib;
     uint16_t lux;
+    uint16_t lux_avg;
     float lux_acc = 0.0;
     qLCD_t lcd;
     rtc_t time;
@@ -951,7 +961,7 @@ void task_Control(void *pvParams)
     // salida controlador
     float alpha_p = 0.7;
     float duty = 0.5;
-    float duty0 = 0.0;
+    float duty_f0 = 0.0;
     float duty_f = 0.0;
     ///////////////////////////
     TickType_t last_tick = xTaskGetTickCount();
@@ -977,7 +987,7 @@ void task_Control(void *pvParams)
                 // PLANTA RAPIDA - PID
                 alpha_p = 0.7;
                 kp = 0.0002;
-                ki = 0.0001;
+                ki = 0.00005;
                 kd = 0.00001;
             }
             else {
@@ -996,8 +1006,8 @@ void task_Control(void *pvParams)
             //////////////////////////////////////////
             ///// CONTROL PID ////////////////////////
             // ap = kp*error;
-            // ai = (kp*ts/ti)*(error+error0) + ai0;
-            // ad = (kp*td/ts)*(error-error0);
+            // ai = (kp/ti)*(error+error0) + ai0;
+            // ad = (kp*td)*(error-error0);
             // duty = ap + ai + ad;
             //////////////////////////////////////////
 
@@ -1011,10 +1021,10 @@ void task_Control(void *pvParams)
             // BANDA DE ERROR
             eR = error / settings.setpoint;
             // Leds debug muestran banda de error al 5%
-            if(eR > 0.05) LED1_ON;
-            else LED1_OFF;
-            if(eR < -0.05) LED2_ON;
-            else LED2_OFF;
+            //if(eR > 0.05) LED1_ON;
+            //else LED1_OFF;
+            //if(eR < -0.05) LED2_ON;
+            //else LED2_OFF;
 
             // ACCIONES PID
             ap = kp*error;
@@ -1034,35 +1044,35 @@ void task_Control(void *pvParams)
 
             // Filtro EMA - suavizado de duty
             // CONTROLA LA RESPUESTA DE LA PLANTA
-            duty_f = alpha_p*duty + (1 - alpha_p)*duty0;
-            duty0 = duty_f;
+            duty_f = alpha_p*duty + (1 - alpha_p)*duty_f0;
+            duty_f0 = duty_f;
 
-            // CLAMP + ALARMAS
+            // CLAMP + LEDS
             if(duty_f > 0.95){
                 // Enciendo alarma de limite de ajuste
-                ALARMA_LO_ON;
+                LED1_ON;
                 // clamp
                 duty_f = 0.95;
             }
-            else ALARMA_LO_OFF;
+            else LED1_OFF;
 
             if(duty_f < 0.10){
                 // Enciendo alarma de limite de ajuste
-                ALARMA_HI_ON;
+                LED2_ON;
                 // clamp
                 duty_f = 0.10;
             }
-            else ALARMA_HI_OFF;
+            else LED2_OFF;
 
             // ACTUALIZO EL DUTY
             // IMPORTANTE: 0 -> MAX / 1 -> MIN
             setup_pwm(1 - duty_f);
 
-            //last_tick = tick;
-            //tick = xTaskGetTickCount();
-            //dif_ticks = tick - last_tick;
-            //printf("\rLUX = %5d\teR = %.2f\tAP = %.3f\tAI = %.3f\tAD = %.3f\tduty = %2.2f\t%4dms", 
-            //    lux, 100*eR, ap, ai, ad, duty_f, dif_ticks);
+            last_tick = tick;
+            tick = xTaskGetTickCount();
+            dif_ticks = tick - last_tick;
+            printf("\rLUX = %5d\teR = %.2f\tAP = %.3f\tAI = %.3f\tAD = %.3f\tduty = %2.2f\t%4dms", 
+                lux, 100*eR, ap, ai, ad, duty_f, dif_ticks);
             // printf("\nd_Ticks: %5dms - LUX= %d - duty = %.2f", dif_ticks, lux, duty_f);
 
             // Acumulo lux para mostrar en lcd
@@ -1070,13 +1080,14 @@ void task_Control(void *pvParams)
             lux_acc += (float) lux; 
         }
 
-        //Mostrar promedio de medicion de lux cada 10 muestras
+        // Mostrar promedio de medicion de lux cada 10 muestras
+        // Actualizar alarmas de banda de error de usuario
         if(show_lux > 9){
             lux_acc = lux_acc / show_lux;
-            lux = (uint16_t) lux_acc;
+            lux_avg = (uint16_t) lux_acc;
             lux_acc = 0.0;
             // Armo el texto para el LCD
-            sprintf(lcd.text, "LUX: %5d", lux);
+            sprintf(lcd.text, "LUX: %5d", lux_avg);
             lcd.line = 0;
             lcd.clear = 0;
             // Envio a la cola del lcd
@@ -1085,6 +1096,12 @@ void task_Control(void *pvParams)
             taskYIELD();
             // Reseteo contador
             show_lux = 0;
+
+            // Alarmas de ajuste de usuario
+            if(lux_avg > settings.user_max) ALARMA_HI_ON;
+            else ALARMA_HI_OFF;
+            if(lux_avg < settings.user_min) ALARMA_LO_ON;
+            else ALARMA_LO_OFF;
         }
 
         // Guardo ultima lectura de segundos
@@ -1115,13 +1132,6 @@ void task_LedRun(void *pvParams)
         // PPS
         // if(toggle) toggle = 0;
         // else toggle = 1;
-    }
-}
-
-void task_Setup(void *pvParams)
-{
-    while(1){
-        
     }
 }
 
@@ -1172,9 +1182,9 @@ int main()
     uint8_t data[32];
     settings_t settings;
     settings.index = 0;
-    settings.setpoint = 1000;
-    settings.user_max = 1100;
-    settings.user_min = 900;
+    settings.setpoint = 500;
+    settings.user_max = 600;
+    settings.user_min = 400;
     settings.curva = 0;
     settings.time = init;
     settings2bytes(&settings, data);
@@ -1184,9 +1194,9 @@ int main()
     calibration_t calib;
     calib.kp_r = 0.0005;
     calib.ti_r = 5.0;
-    calib.td_r = 0.1;
-    calib.kp_l = 0;
-    calib.ti_l = 0;
+    calib.td_r = 0.02;
+    calib.kp_l = 0.00005;
+    calib.ti_l = 5.0;
     calib.lux_max = 5000;
     calib.lux_min = 1;
     memcpy(data, &calib, sizeof(calibration_t));
