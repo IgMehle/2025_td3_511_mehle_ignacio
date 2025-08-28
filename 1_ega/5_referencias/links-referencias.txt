@@ -1,0 +1,2 @@
+https://eloctavobit.com/modulos-sensores/codificador-rotatorio-ky-040-rotary-encoder
+https://hackaday.com/2015/12/09/embed-with-elliot-debounce-your-noisy-buttons-part-i/
