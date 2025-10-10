@@ -1,0 +1,4 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "TD3-EGA")(type "KiCad")(uri "${KIPRJMOD}/TD3-EGA.pretty")(options "")(descr ""))
+)
