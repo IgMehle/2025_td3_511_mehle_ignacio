@@ -3,10 +3,13 @@
 #include <linux/kernel.h>
 #include <linux/kthread.h>
 #include <linux/delay.h>
-//#include "gpio_driver.h"
+#include "gpio_driver.h"
 
 // Etiqueta para el autor del modulo
 #define AUTHOR "IgMehle"
+
+// GPIO led (output)
+#define LED 17
 
 // Puntero para primer hilo
 static struct task_struct *thread1;
@@ -21,7 +24,10 @@ static int thread1_f(void *params) {
     // Corre mientras no haya otros procesos que lo detengan
     while(!kthread_should_stop()) {
         // Mensaje para el Kernel
-        printk(KERN_INFO "%s: Hola desde el kernel!\n", AUTHOR);
+        // printk(KERN_INFO "%s: Hola desde el kernel!\n", AUTHOR);
+        pr_info("%s: Hola desde el kernel!\n", AUTHOR);
+        // Enciendo led
+        gpio_set(LED);
         // Demora de un segundo
         msleep(1000);
     }
@@ -37,7 +43,10 @@ static int thread2_f(void *params) {
 		// Demora de medio segundo
 		msleep(500);
         // Mensaje para el Kernel
-        printk(KERN_INFO "%s: Chau desde el kernel!\n", AUTHOR);
+        // printk(KERN_INFO "%s: Chau desde el kernel!\n", AUTHOR);
+        pr_info("%s: Chau desde el kernel!\n", AUTHOR);
+        // Apago led
+        gpio_clr(LED);
         // Demora de medio segundo
 		msleep(500);
     }
@@ -49,7 +58,8 @@ static int thread2_f(void *params) {
 /// @return 0 si OK
 static int __init kernel_module_init(void) {
 	// Mensaje para el kernel
-	printk(KERN_INFO "%s: Insertando el modulo de kernel\n", AUTHOR);
+	// printk(KERN_INFO "%s: Insertando el modulo de kernel\n", AUTHOR);
+    pr_info("%s: Insertando el modulo de kernel\n", AUTHOR);
     // Intento crear y correr el hilo 1
 	thread1 = kthread_run(
         thread1_f,  // Callback
@@ -58,7 +68,8 @@ static int __init kernel_module_init(void) {
     );
     // Verifico si hubo error al crearlo
     if (IS_ERR(thread1)) {
-        printk(KERN_ERR "%s: Error al crear thread 1\n", AUTHOR);
+        // printk(KERN_ERR "%s: Error al crear thread 1\n", AUTHOR);
+        pr_info("%s: Error al crear thread 1\n", AUTHOR);
         return -1;
     }
     // Intento crear y correr el hilo 2
@@ -69,11 +80,19 @@ static int __init kernel_module_init(void) {
     );
     // Verifico si hubo error al crearlo
     if (IS_ERR(thread2)) {
-        printk(KERN_ERR "%s: Error al crear thread 2\n", AUTHOR);
+        // printk(KERN_ERR "%s: Error al crear thread 2\n", AUTHOR);
+        pr_info("%s: Error al crear thread 2\n", AUTHOR);
         // Elimino el hilo anterior
         kthread_stop(thread1);
         return -1;
     }
+
+    // Si se pudieron crear los hilos, mapeo gpio como salida
+    gpio_map();
+    gpio_set_dir_output(LED);
+    // Enciendo led
+    gpio_set(LED);
+
 	return 0;
 }
 
@@ -93,6 +112,8 @@ static void __exit kernel_module_exit(void) {
         // Detengo el hilo
         kthread_stop(thread2);
     }
+    // Limpio la memoria mapeada
+    gpio_unmap();
 }
 
 // Registro la funcion de inicializacion y salida
