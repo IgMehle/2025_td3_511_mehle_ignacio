@@ -1,0 +1,45 @@
+GESTION DE INTERRUPCIONES
+
+IMPORTANTE! El concepto de Prioridades de las ISR es totalmente distinto e independiente (prioridades de hardware, en cortex lo maneja el NVIC) a las prioridades de tareas de Freertos.
+Como las ISR son eventos disparados por hardware, cuando salten voy a estar saliendo del hilo de ejecucion del sistema, y Freertos tiene que estar enterado de ello.
+Para orquestar las ISR y tareas se utilizan semaforos.
+
+SEMAFOROS
+
+Conceptualmente son queues de 1 elemento.
+Hay de 3 tipos:	BINARIOS
+				DE EXCLUSION MUTUA (MUTEX)
+				CONTADORES
+
+Se utilizan para sincronizar un evento de interrupcion con una TAREA ASOCIADA a la interrupcion. Se les llama tareas manejadoras (Handler).
+Las API de semaforo principales son TAKE y GIVE. Ambas son similares a ESCRIBIR y LEER una queue.
+
+TAKE --- "LEER" el semaforo (como hacer un Receive de una cola de 1 elemento). Si una tarea quiere hacer un un TAKE a un semaforo vacio, se bloquea.
+GIVE --- "ESCRIBIR" el semaforo, de forma similar a la queue, si quiero ocupar/escribir un semaforo que no este liberado me bloqueo.
+
+Cada semaforo se asocia a un recurso del sistema (una interrupcion de hardware, por ejemplo). Un TAKE hace referencia a "tomar" ese recurso.
+Cuando salta la interrupcion, en la ISR se hace un GIVE al semaforo, para que la tarea Handler de esa interrupcion pueda hacer un TAKE a ese semaforo, desbloquearse y correr.
+Las tareas Handler, como estan asociadas a las interrupciones, tienen que tener SIEMPRE mayor prioridad a toda tarea que este corriendo de fondo.
+
+SEMAFOROS BINARIOS
+
+Para usar los semaforos hay que incluir la biblioteca "smphr.h"
+	
+	#include "smphr.h"
+
+Primero hay que crear el handle del semaforo, como con tareas y queues:
+
+	xSemaphoreHandle handle_semaforo;
+
+Un semaforo binario se crea con:
+
+	vSemaphoreCreateBinary(handle_semaforo);
+	
+SEMAFOROS MUTEX (DE EXCLUSION MUTUA)
+
+Cuando un recurso (un periferico, por ejemplo) esta compartido entre dos o mas tareas o interrupciones, tengo que asegurarme que esa tarea tiene acceso exclusivo a ese recurso, y que no va a ser interrumpida por otra tarea de mayor prioridad. A este concepto de que solo una tarea acceda a un recurso compartido se lo llama EXCLUSION MUTUA.
+
+SEMAFOROS COUNTING
+
+Cuando ocurren varias interrupciones antes de que la tarea handler corra, con un semaforo handler contamos esta cantidad de eventos.
+

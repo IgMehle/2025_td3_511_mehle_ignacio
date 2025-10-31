@@ -1,0 +1,242 @@
+GIT
+Cuando el tp esta aprobado:
+
+$ git checkout main
+$ git merge <rama tp>
+
+Se debe escribir un mensaje tipo commit para mergear, generalmente abre un editor de texto... 
+si es vim, para salir de vim es... ESC + :wq ENTER
+
+$ git push origin main // pushea la rama main al remoto
+
+Sync fork - Puede ser que estemos delante de la rama main
+
+14/5/2025
+
+CLASE DE COLAS
+
+https://www.freertos.org/Documentation/02-Kernel/07-Books-and-manual/01-RTOS_book	
+->	Mastering the FreeRTOS Real Time Kernel - A Hands On Tutorial Guide
+->	FreeRTOS Reference Manual
+
+Las colas se usan para pasar datos entre tareas.
+En una cola solo puedo guardar datos DEL MISMO TIPO. 
+Tiene que quedar bien definido el tamaño y tipo de los items de la cola.
+
+// EJEMPLO (FreeRTOS ref. manual pag. 163)
+
+/* Define the data type that will be queued. */
+typedef struct A_Message
+{
+	char ucMessageID;
+	char ucData[ 20 ];
+} AMessage;
+/* Define the queue parameters. */
+#define QUEUE_LENGTH 5
+#define QUEUE_ITEM_SIZE sizeof( AMessage )
+int main( void )
+{
+	QueueHandle_t xQueue;
+	/* Create the queue, storing the returned handle in the xQueue variable. */
+	xQueue = xQueueCreate( QUEUE_LENGTH, QUEUE_ITEM_SIZE );
+	if( xQueue == NULL )
+	{
+		/* The queue could not be created. */
+	}
+	/* Rest of code goes here. */
+}
+
+La memoria estatica se declara en el momento de compilacion
+La memoria  dinamica se define en runtime, usa malloc()
+Las colas usan memoria dinamica. 
+
+QUEUE RECEIVE
+
+BaseType_t xQueueReceive( 	QueueHandle_t xQueue,
+							void *pvBuffer,
+							TickType_t xTicksToWait );
+
+Ticks to wait -> Se suele usar portMAX_DELAY
+
+// EJEMPLO DE QUEUE RECEIVE (PAG. 188)
+
+//* Define the data type that will be queued. */
+typedef struct A_Message
+{
+    char ucMessageID;
+    char ucData[20];
+} AMessage;
+/* Define the queue parameters. */
+#define QUEUE_LENGTH 5
+#define QUEUE_ITEM_SIZE sizeof(AMessage)
+int main(void)
+{
+    QueueHandle_t xQueue;
+    /* Create the queue, storing the returned handle in the xQueue variable. */
+    xQueue = xQueueCreate(QUEUE_LENGTH, QUEUE_ITEM_SIZE);
+    if (xQueue == NULL)
+    {
+        /* The queue could not be created – do something. */
+    }
+    /* Create a task, passing in the queue handle as the task parameter. */
+    xTaskCreate(vAnotherTask,
+“Task”,
+                STACK_SIZE,
+                (void *)xQueue, /* The queue handle is used as the task parameter. */
+                TASK_PRIORITY,
+                NULL);
+    /* Start the task executing. */
+    vTaskStartScheduler();
+    /* Execution will only reach here if there was not enough FreeRTOS heap memory
+    remaining for the idle task to be created. */
+    for (;;)
+        ;
+}
+void vAnotherTask(void *pvParameters)
+{
+    QueueHandle_t xQueue;
+    AMessage xMessage;
+    /* The queue handle is passed into this task as the task parameter. Cast the
+    void * parameter back to a queue handle. */
+    xQueue = (QueueHandle_t)pvParameters;
+    for (;;)
+    {
+        /* Wait for the maximum period for data to become available on the queue.
+        The period will be indefinite if INCLUDE_vTaskSuspend is set to 1 in
+        FreeRTOSConfig.h. */
+        if (xQueueReceive(xQueue, &xMessage, portMAX_DELAY) != pdPASS)
+        {
+            /* Nothing was received from the queue – even after blocking to wait
+            for data to arrive. */
+        }
+        else
+        {
+            /* xMessage now contains the received data. */
+        }
+    }
+}
+
+QUEUE SEND
+
+// EJEMPLO DE QUEUE SEND
+
+/* Define the data type that will be queued. */
+typedef struct A_Message char ucMessageID;
+char ucData[20];
+}
+AMessage;
+/* Define the queue parameters. */
+#define QUEUE_LENGTH 5
+#define QUEUE_ITEM_SIZE sizeof(AMessage)
+int main(void)
+{
+    QueueHandle_t xQueue;
+    /* Create the queue, storing the returned handle in the xQueue variable. */
+    xQueue = xQueueCreate(QUEUE_LENGTH, QUEUE_ITEM_SIZE);
+    if (xQueue == NULL)
+    {
+        /* The queue could not be created – do something. */
+    }
+    /* Create a task, passing in the queue handle as the task parameter. */
+    xTaskCreate(vAnotherTask,
+“Task”,
+                STACK_SIZE,
+                (void *)xQueue, /* xQueue is used as the task parameter. */
+                TASK_PRIORITY,
+                NULL);
+    /* Start the task executing. */
+    vTaskStartScheduler();
+    /* Execution will only reach here if there was not enough FreeRTOS heap memory
+    remaining for the idle task to be created. */
+    for (;;)
+        ;
+}
+void vATask(void *pvParameters)
+{
+    QueueHandle_t xQueue;
+    AMessage xMessage;
+    /* The queue handle is passed into this task as the task parameter. Cast
+    the parameter back to a queue handle. */
+    xQueue = (QueueHandle_t)pvParameters;
+    for (;;)
+    {
+        /* Create a message to send on the queue. */
+        xMessage.ucMessageID = SEND_EXAMPLE;
+        /* Send the message to the queue, waiting for 10 ticks for space to become
+        available if the queue is already full. */
+        if (xQueueSendToBack(xQueue, &xMessage, 10) != pdPASS)
+        {
+            /* Data could not be sent to the queue even after waiting 10 ticks. */
+        }
+    }
+}
+
+QUEUE PEEK
+
+A diferencia de Receive, Peek lee el dato pero no lo saca de la cola
+RECEIVE -> Ctrl X
+PEEK -> Ctrl C
+
+QUEUE OVERWRITE
+
+A diferencia de Send, sobreescribe el dato en la cola (nunca bloquea porque siempre se puede sobreescribir)
+
+QUEUE RECEIVE FROM ISR
+
+BaseType_t xQueueReceiveFromISR( 	QueueHandle_t xQueue,
+									void *pvBuffer,
+									BaseType_t *pxHigherPriorityTaskWoken );
+
+PX HIGH PRIORITY TASK WOKEN: Tengo una tarea P2 bloqueada, y otra P1 running. Llega la interrupcion, y con el handler de la tarea de prioridad 2 la  desbloquea.
+
+// EJEMPLO DE RECEIVE FROM ISR
+
+/* vISR is an interrupt service routine that empties a queue of values, sending each
+to a peripheral. It might be that there are multiple tasks blocked on the queue
+waiting for space to write more data to the queue. */
+void vISR(void)
+{
+    char cByte;
+    BaseType_t xHigherPriorityTaskWoken;
+    /* No tasks have yet been unblocked. */
+    xHigherPriorityTaskWoken = pdFALSE;
+    /* Loop until the queue is empty.
+    xHigherPriorityTaskWoken will get set to pdTRUE internally within
+    xQueueReceiveFromISR() if calling xQueueReceiveFromISR()caused a task to leave
+    the Blocked state, and the unblocked task has a priority equal to or greater than
+    the task currently in the Running state (the task this ISR interrupted). */
+    while (xQueueReceiveFromISR(xQueue,
+                                &cByte,
+                                &xHigherPriorityTaskWoken) == pdPASS)
+    {
+        /* Write the received byte to the peripheral. */
+        OUTPUT_BYTE(TX_REGISTER_ADDRESS, cByte);
+    }
+    /* Clear the interrupt source. */
+    /* Now the queue is empty and we have cleared the interrupt we can perform a
+    context switch if one is required (if xHigherPriorityTaskWoken has been set to
+    pdTRUE. NOTE: The syntax required to perform a context switch from an ISR varies
+    from port to port, and from compiler to compiler. Check the web documentation and
+    examples for the port being used to find the correct syntax required for your
+    application. */
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
+
+TP2
+
+Clickear la opcion CONSOLE OVER USB en el proyecto.
+Sino, en cmakelists editar:
+# Modify the below lines to enable/disable output over UART/USB
+pico_enable_stdio_uart(firmware 0)
+pico_enable_stdio_usb(firmware 1) // poner en 1
+
+# Add the standard library to the build
+target_link_libraries(firmware
+        pico_stdlib
+        hardware_adc	// agregar
+        freertos)
+
+CMake es un generador de rutas para el compilador
+
+// agregar #include "hardware/adc"
+

@@ -1,0 +1,23 @@
+Cmakelists
+
+ADD LIBRARY
+A mi proyecto le agrego archivos source
+
+TARGET LINK LIBRARIES
+Agrego dependencias de la biblioteca que agreguemos, por ejemplo del sdk de la pico
+
+TARGET INCLUDE
+Donde va a buscar los headers
+
+Desde el cmakelists del proyecto hay que indicar:
+
+DEBUGGER
+Podemos hacer un Debugger desde otra Pico. Repo: https://github.com/raspberrypi/debugprobe
+Vamos a Releases. Bajamos el debugprobe_on_pico.uf2 y se lo tiramos a la Pico que vamos a usar como debugger.
+
+DEBUGGER ->	TARGET
+GPIO2		SWCLK
+GPIO3		SWDIO
+GND			GND
+VSYS		VSYS (opcional)
+

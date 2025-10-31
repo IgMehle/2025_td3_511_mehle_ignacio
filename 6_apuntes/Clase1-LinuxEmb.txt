@@ -1,0 +1,105 @@
+KERNEL DE LINUX
+
+Caso de estudio: que pasa si quiero implementar una uart por software en la Pi?
+No puedo porque del lado de usuario no puedo interactuar dierectamente con los GPIO.
+Hay que trabajar del lado del kernel.
+
+Pi4: Raspberry Pi OS Lite 64bit
+PC: Distro ualquiera o maquina virtual - NOTAR QUE VERSION DE KERNEL TIENE
+
+IMPORTANTE: No hay garantia de que algo hecho para el kernel 5.xx funcione (o siquiera compile) para un kernel 6.xx
+VERSIONES... bootlin Elixir Cross Reference
+
+RPI IMAGER
+EDIT SETTINGS
+Hostname: tomar nota
+
+SSH - Conectarse a la Pi
+EN LINUX Y MAC: viene por consola
+EN WINDOWS: desde consola si esta instalado el cliente de ssh
+
+$ ssh <usuario>@<hostname>.local
+$ <password>
+
+Iniciamos sesion en Linux
+
+usuario@hostname:~ $
+$ significa que estas logueado como usuario comun
+# significa sesion de root (admin)
+
+FILESYSTEM DE LINUX
+
+/ -- Raiz del sistema de archivos
+
+/bin
+
+/
+
+"EN Linux TODO es un archivo"
+/dev -- Aca estan los archivos de dispositivos de hardware
+
+/home -- Los archivos de cada Usuario
+
+/mnt -- Volumenes extraibles y discos
+
+/proc -- Procesos corriendo como archivos
+
+/root -- Directorio del usuario root
+
+Cuando nos logueamos nos tira por defecto a la ruta ~ que es el directorio del usuario (/home/usuario)
+
+$ pwm te dice donde estas
+$ ls listar archivos en el directorio
+$ cd cambiar directorio
+$ rm borrar (-r recursivo, -f force, sin preguntar)
+$ sudo Correr como root (admin)
+
+MANDAR UNA CARPETA ENTERA A LA PI
+
+$ scp -r <carpeta> usuario@hostname.local:<ruta>
+
+ej) carpeta gpos_hello_kernel
+
+abrimos el Makefile (automatizador de compilacion)
+$ nano Makefile
+
+KDIR: Directorio del modulo de kernel
+$(shell uname -r) concatena la version del kernel
+
+MDIR: donde van los archivos que se generan al compilar
+
+### hello_kernel01.c ###
+
+EVENTOS:    Cuando se carga el modulo en el kernel se corre hello_kernel_init()
+            Cuando se saca el modulo del kernel se corre hello_kernel_exit()
+
+COMPILAR
+$ make # da la orden a make para que compile
+$ cd build # entro a carpeta /build
+$ sudo insmod build/hello_kernel.ko # carga modulo en el KERNEL
+ko es "kernel object"
+
+Donde imprime el kernel? Con el programa dmesg
+$ dmesg
+
+IMPORTANTE: A medida que inicializamos un modulo, imprimir mensajes de kernel (NO HAY DEBUG)
+Poner el nombre del 
+
+$ lsmod # muestra todos los modulos cargados en el kernel
+$ sudo rmmod <modulo> # saca modulo del kernel
+
+$ dmesg | grep utn-fra-td3 # grep filtra texto, | es una OR logica para programas
+
+BLINK LED
+
+Como hago para hacer parpadear un led?
+Abrimos un nuevo hilo con kthread_run() - Devuelvo un handle (thread1) al hilo creado
+Verificar que el handle es valido, sino return un -1 --- asi el kernel no carga el modulo y tira mensajes de error
+-- Cargar un modulo en el kernel implica inicializar recursos del sistema
+
+Creo un nuevo hilo (thread2) y SI NO LO PUEDO CREAR libero los recursos del anterior (thread1)
+
+$ dmesg -wT # Corre continuamente los mensajes de kernel (con timestamp formateado)
+
+
+

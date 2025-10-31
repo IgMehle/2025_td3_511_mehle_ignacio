@@ -1,0 +1,6 @@
+----- CLASE 5 - MANEJO DE MEMORIA -----
+
+El kernel tiene que asignar dinamicamente la memoria RAM (malloc y free) cada vez que se crean tareas, colas y semaforos.
+FreeRTOS hace esto en tiempo de ejecucion porque es un sistema dinamico. Sistemas estaticos (como OSEK) definen todos estos recursos de forma estatica, antes de la ejecucion, por lo que el tiempo es DETERMINISTICO (se exactamente cuanto dura cada tiempo de ejecucion de un bloque de programa).
+Con FreeRTOS puedo ser deterministico usando funciones como vTaskDelayUntil().
+
