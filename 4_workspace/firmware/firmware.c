@@ -6,6 +6,7 @@
 #include "hardware/clocks.h"
 #include "hardware/gpio.h"
 #include "hardware/irq.h"
+#include "hardware/uart.h"
 // Headers de librerias de modulos
 #include "bh1750.h"
 #include "ds3231.h"
@@ -57,6 +58,26 @@
 #define ALARMA_LO_OFF   gpio_put(AL_LO_PIN, true)
 #define ALARMA_HI_ON    gpio_put(AL_HI_PIN, false)
 #define ALARMA_HI_OFF   gpio_put(AL_HI_PIN, true)
+
+// ----- UART -----
+#define UART_ID uart0
+#define UART_TX_PIN 0
+#define UART_RX_PIN 1
+#define UART_BAUDRATE 115200
+#define UART_BUFFER_SIZE 128
+
+// COMANDOS + ARGUMENTOS
+// set lux -v INT -h INT -l INT -a INT
+// get lux
+// get log
+// set eclear
+// set rtc "day/month/year weekday hour:min:seg"
+
+static char rx_buffer[UART_BUFFER_SIZE];
+static uint16_t rx_index = 0;
+// Queue de manejo de uart
+QueueHandle_t q_uart = NULL;
+// --------------------------------------
 
 // Handles de tareas
 TaskHandle_t tControl, tLuxo, tPWM, tConfig;
@@ -140,6 +161,26 @@ typedef struct dumpreq {
 //volatile uint8_t toggle2 = 0;
 //lut_t lut[101];
 
+void uart_set(const char *args) {
+    #warning "Implementar uart_set()"
+    printf("[CMD] uart_set() recibido: %s\n", args);
+}
+
+void uart_get(const char *args) {
+    #warning "Implementar uart_get()"
+    printf("[CMD] uart_get() recibido: %s\n", args);
+}
+
+void uart_log(const char *args) {
+    #warning "Implementar uart_log()"
+    printf("[CMD] uart_log() recibido: %s\n", args);
+}
+
+void uart_clear(const char *args) {
+    #warning "Implementar uart_clear()"
+    printf("[CMD] uart_clear() recibido: %s\n", args);
+}
+
 void settings2bytes(settings_t *settings, uint8_t *bytes)
 {
     bytes[0] = (uint8_t)(((settings->index)>>8) & 0x00FF);
@@ -180,6 +221,63 @@ void bytes2settings(settings_t *settings, uint8_t *bytes)
     settings->time.day = bytes[13];
     settings->time.month = bytes[14];
     settings->time.year = bytes[15];
+}
+
+/* ISR de recepción UART */
+void on_uart_rx() {
+    while (uart_is_readable(UART_ID)) {
+        char c = uart_getc(UART_ID);
+
+        if (c == '\r' || c == '\n') {
+            if (rx_index > 0) {
+                rx_buffer[rx_index] = '\0';
+                BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+                xQueueSendFromISR(q_uart, rx_buffer, &xHigherPriorityTaskWoken);
+                rx_index = 0;
+                portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+            }
+        } else if (rx_index < UART_BUFFER_SIZE - 1) {
+            rx_buffer[rx_index++] = c;
+        }
+    }
+}
+
+/* Inicialización de la UART */
+static void uart_init_task() {
+    uart_init(UART_ID, UART_BAUDRATE);
+    gpio_set_function(UART_TX_PIN, GPIO_FUNC_UART);
+    gpio_set_function(UART_RX_PIN, GPIO_FUNC_UART);
+
+    uart_set_hw_flow(UART_ID, false, false);
+    uart_set_format(UART_ID, 8, 1, UART_PARITY_NONE);
+    uart_set_fifo_enabled(UART_ID, false);
+
+    irq_set_exclusive_handler(UART0_IRQ, on_uart_rx);
+    irq_set_enabled(UART0_IRQ, true);
+    uart_set_irq_enables(UART_ID, true, false);
+}
+
+/* Tarea principal de la UART */
+void task_UART(void *pvParameters) {
+    char cmd_buffer[UART_BUFFER_SIZE];
+
+    uart_init_task();
+    q_uart = xQueueCreate(4, UART_BUFFER_SIZE);
+
+    for (;;) {
+        if (xQueueReceive(q_uart, cmd_buffer, portMAX_DELAY) == pdTRUE) {
+            if (strncmp(cmd_buffer, "set", 3) == 0)
+                uart_set(cmd_buffer);
+            else if (strncmp(cmd_buffer, "get", 3) == 0)
+                uart_get(cmd_buffer);
+            else if (strncmp(cmd_buffer, "log", 3) == 0)
+                uart_log(cmd_buffer);
+            else if (strncmp(cmd_buffer, "clear", 5) == 0)
+                uart_clear(cmd_buffer);
+            else
+                printf("[UART] Comando desconocido: %s\n", cmd_buffer);
+        }
+    }
 }
 
 void irq_gpio(uint gpio, uint32_t events)
@@ -1278,6 +1376,7 @@ int main()
     xTaskCreate(task_EEPROM, "EEPROM", 1024, NULL, 4, NULL);
     xTaskCreate(task_Encoder, "Encoder", 128, NULL, 5, NULL);
     //xTaskCreate(task_Setup, "SETUP", 1024, NULL, 6, NULL);
+    xTaskCreate(task_UART, "UART", 512, NULL, 2, NULL);
 
     // Enciendo el scheduler
     vTaskStartScheduler();

@@ -19,7 +19,7 @@ add_library(freertos STATIC
 )
 
 # Chack if dynamic allocation is supported
-if(${FREERTOS_SUPPORT_DYNAMIC_ALLOCATION} STREQUAL "ON")
+if(DEFINED FREERTOS_SUPPORT_DYNAMIC_ALLOCATION AND FREERTOS_SUPPORT_DYNAMIC_ALLOCATION STREQUAL "ON")
     # Default heap implementation
     if(NOT DEFINED FREERTOS_HEAP)
         set(FREERTOS_HEAP "heap_4")

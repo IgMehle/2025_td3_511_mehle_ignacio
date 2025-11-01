@@ -60,6 +60,7 @@ target_link_libraries(firmware
         hardware_clocks
         hardware_irq
         hardware_gpio
+        hardware_uart
         freertos
         bh1750
         ds3231
