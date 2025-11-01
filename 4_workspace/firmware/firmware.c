@@ -161,66 +161,200 @@ typedef struct dumpreq {
 //volatile uint8_t toggle2 = 0;
 //lut_t lut[101];
 
-void uart_set(const char *args) {
+void uart_set_lux(const char *args)
+{
+    settings_t settings = {0};
+    char buffer[UART_BUFFER_SIZE];
+
+    // Copio args a buffer
+    strncpy(buffer, args, UART_BUFFER_SIZE);
+    buffer[UART_BUFFER_SIZE - 1] = '\0';
+    // Tokenizer
+    /* 
+    * char *strtok(char *string1, const char *string2);
+    *
+    * La función strtok() lee string1 como una serie de cero o más señales, 
+    * y string2 como el conjunto de caracteres que sirven como delimitadores de las señales en string1.
+    * En la primera llamada a la función strtok() para una string1 determinada
+    * la función strtok() busca la primera señal en string1, omitiendo los delimitadores iniciales.
+    * Se devuelve un puntero a la primera señal.
+    * En llamadas posteriores con la misma serie de señal, 
+    * la función strtok() devuelve un puntero a la siguiente señal de la serie.
+    * Se devuelve un puntero NULL cuando no hay más señales.
+    * Todas las señales tienen un final nulo.
+    */
+    char *token = strtok(buffer, " ");
+    // Ignoramos los primeros tokens ("set", "lux")
+    /* Cuando se llama a la función strtok() con un argumento NULL string1 
+    * la siguiente señal se lee de una copia almacenada del último parámetro string1 no nulo.
+    * Cada delimitador se sustituye por un carácter nulo. 
+    * El conjunto de delimitadores puede variar de una llamada a otra, 
+    * por lo que string2 puede tomar cualquier valor. 
+    * Tenga en cuenta que el valor inicial de string1 no se conserva 
+    * después de la llamada a la función strtok()
+    */
+    while (token && strcmp(token, "set") == 0)
+        token = strtok(NULL, " ");
+    if (token && strcmp(token, "lux") == 0)
+        token = strtok(NULL, " ");
+    
+    // Parseo los pares flag + valor
+    while (token != NULL)
+    {
+        if (strcmp(token, "-v") == 0)
+        {
+            token = strtok(NULL, " ");
+            if (token) settings.setpoint = (uint16_t) atoi(token);
+        }
+        else if (strcmp(token, "-h") == 0)
+        {
+            token = strtok(NULL, " ");
+            if (token) settings.user_max = (uint16_t) atoi(token);
+        }
+        else if (strcmp(token, "-l") == 0)
+        {
+            token = strtok(NULL, " ");
+            if (token) settings.user_min = (uint16_t) atoi(token);
+        }
+        else if (strcmp(token, "-a") == 0)
+        {
+            token = strtok(NULL, " ");
+            if (token) settings.curva = (uint8_t) atoi(token);
+        }
+
+        token = strtok(NULL, " ");
+    }
+    
+    // FOR TESTING
+    // Confirmo que recibi los datos del nuevo setting
+    printf("[OK] Lux = %5d - Max = %5d - Min: %5d - Curva: %1d\n",
+         settings.setpoint, settings.user_max, settings.user_min, settings.curva);
+}
+
+void uart_eclear(void)
+{
+    // clear_settings();
+    printf("[OK] Comando de borrado recibido\n");
+}
+
+void uart_set_rtc(const char *args)
+{
+    rtc_t time = {0};
+    uint8_t d, m, y, wd, hh, mm, ss;
+    /* STRING ESPERADA
+    * <set rtc "day/month/year weekday hour:min:seg"> 
+    * 1) separar set y rtc (hardcodeado con puntero)
+    * 2) tomar el string entre comillas
+    * 3) parsear con sscanf()
+    */
+    char buffer[24];
+    // Puntero, salto "set rtc "
+    const char *ptr = args + 8;
+    // salta posibles espacios
+    while (*ptr == ' ') ptr++;
+    // copia hasta fin de cadena (se podria hacer con strncpy)
+    for (uint8_t i = 0; i < 23 && *ptr; i++, ptr++) buffer[i] = *ptr;
+    buffer[23] = '\0';  // asegurar terminación
+
+    /*
+    * La función sscanf() lee datos del almacenamiento intermedio
+    * en las ubicaciones que proporciona la lista-argumentos. Cada
+    * argumento debe ser un puntero a una variable con un tipo que
+    * corresponda a un especificador de tipo en la serie-formato.
+    */
+    // Deserializo con sscanf()
+    int parsed = sscanf(buffer, "%hhu/%hhu/%hhu %hhu %hhu:%hhu:%hhu",
+                        &d, &m, &y, &wd, &hh, &mm, &ss);
+    if(parsed == 7){
+        time.day = d;
+        time.month = m;
+        time.year = y;
+        time.weekday = wd;
+        time.hour = hh;
+        time.min = mm;
+        time.seg = ss;
+        // FOR TESTING
+        printf("[OK] RTC_T recibido: %2d/%2d/%2d %1d %2d:%2d:%2d\n",
+        time.day, time.month, time.year, time.weekday,
+        time.hour, time.min, time.sec);
+    }
+    // FOR TESTING
+    else printf("[RTC] Error de formato de fecha y hora\n");
+    
+}
+
+void uart_get_lux(void)
+{
+    printf("[OK] Comando de lectura de lux recibido\n");
+}
+
+void uart_get_log(void)
+{
+    // log_settings();
+    printf("[OK] Comando de dump log recibido\n");
+}
+
+void uart_cmd_set(const char *args) {
     #warning "Implementar uart_set()"
     printf("[CMD] uart_set() recibido: %s\n", args);
+    /*--- OPCIONES ---
+    // set lux args
+    // set eclear
+    // set rtc args
+    -----------------*/
+    // Buffer de opciones
+    char opc[8] = {0};
+    // Puntero, salto "set "
+    const char *ptr = args + 4;
+    // salta espacios
+    while (*ptr == ' ') ptr++;
+    // copia hasta espacio o fin de cadena
+    for (uint8_t i = 0; i < 7 && *ptr && *ptr != ' '; i++, ptr++) opc[i] = *ptr;
+    opc[7] = '\0';  // asegurar terminación
+
+    // Desglose
+    if(strncmp(opc, "lux", 3) == 0){
+        // Opcion new setting
+        uart_set_lux(args);
+    }
+    else if(strncmp(opc, "rtc", 3) == 0){
+        // Opcion set rtc
+        uart_set_rtc(args);
+    }
+    else if(strncmp(opc, "eclear", 6) == 0){
+        // Opcion clear eeprom
+        uart_eclear();
+    }
+    else printf("[UART] Opcion desconocida: %s\n", opc);
 }
 
-void uart_get(const char *args) {
+void uart_cmd_get(const char *args) {
     #warning "Implementar uart_get()"
     printf("[CMD] uart_get() recibido: %s\n", args);
-}
+    /*--- OPCIONES ---
+    // get lux
+    // get log
+    -----------------*/
+    // Buffer de opciones
+    char opc[6] = {0};
+    // Puntero, salto "get "
+    const char *ptr = args + 4;
+    // salta espacios
+    while (*ptr == ' ') ptr++;
+    // copia hasta espacio o fin de cadena
+    for (uint8_t i = 0; i < 5 && *ptr && *ptr != ' '; i++, ptr++) opc[i] = *ptr;
+    opc[5] = '\0';  // asegurar terminación
 
-void uart_log(const char *args) {
-    #warning "Implementar uart_log()"
-    printf("[CMD] uart_log() recibido: %s\n", args);
-}
-
-void uart_clear(const char *args) {
-    #warning "Implementar uart_clear()"
-    printf("[CMD] uart_clear() recibido: %s\n", args);
-}
-
-void settings2bytes(settings_t *settings, uint8_t *bytes)
-{
-    bytes[0] = (uint8_t)(((settings->index)>>8) & 0x00FF);
-    bytes[1] = (uint8_t)(settings->index & 0x00FF);
-
-    bytes[2] = (uint8_t)(((settings->setpoint)>>8) & 0x00FF);
-    bytes[3] = (uint8_t)(settings->setpoint & 0x00FF);
-    
-    bytes[4] = (uint8_t)(((settings->user_max)>>8) & 0x00FF);
-    bytes[5] = (uint8_t)(settings->user_max & 0x00FF);
-    
-    bytes[6] = (uint8_t)(((settings->user_min)>>8) & 0x00FF);
-    bytes[7] = (uint8_t)(settings->user_min & 0x00FF);
-    
-    bytes[8] = settings->curva;
-    
-    bytes[9] = settings->time.sec;
-    bytes[10] = settings->time.min;
-    bytes[11] = settings->time.hour;
-    bytes[12] = settings->time.weekday;
-    bytes[13] = settings->time.day;
-    bytes[14] = settings->time.month;
-    bytes[15] = settings->time.year;
-}
-
-void bytes2settings(settings_t *settings, uint8_t *bytes)
-{
-    settings->index = ((bytes[0]<<8) & 0xFF00) | bytes[1];
-    settings->setpoint = ((bytes[2]<<8) & 0xFF00) | bytes[3];
-    settings->user_max = ((bytes[4]<<8) & 0xFF00) | bytes[5];
-    settings->user_min = ((bytes[6]<<8) & 0xFF00) | bytes[7];
-    
-    settings->curva = bytes[8];
-    settings->time.sec = bytes[9];
-    settings->time.min = bytes[10];
-    settings->time.hour = bytes[11];
-    settings->time.weekday = bytes[12];
-    settings->time.day = bytes[13];
-    settings->time.month = bytes[14];
-    settings->time.year = bytes[15];
+    // Desglose
+    if(strncmp(opc, "lux", 3) == 0){
+        // Opcion leer valor actual de lux
+        uart_get_lux();
+    }
+    else if(strncmp(opc, "log", 3) == 0){
+        // Opcion traer log de settings
+        uart_get_log();
+    }
+    else printf("[UART] Opcion desconocida: %s\n", opc);
 }
 
 /* ISR de recepción UART */
@@ -267,18 +401,57 @@ void task_UART(void *pvParameters) {
     for (;;) {
         if (xQueueReceive(q_uart, cmd_buffer, portMAX_DELAY) == pdTRUE) {
             if (strncmp(cmd_buffer, "set", 3) == 0)
-                uart_set(cmd_buffer);
+                uart_cmd_set(cmd_buffer);
             else if (strncmp(cmd_buffer, "get", 3) == 0)
-                uart_get(cmd_buffer);
-            else if (strncmp(cmd_buffer, "log", 3) == 0)
-                uart_log(cmd_buffer);
-            else if (strncmp(cmd_buffer, "clear", 5) == 0)
-                uart_clear(cmd_buffer);
-            else
-                printf("[UART] Comando desconocido: %s\n", cmd_buffer);
+                uart_cmd_get(cmd_buffer);
+            else printf("[UART] Comando desconocido: %s\n", cmd_buffer);
         }
     }
 }
+
+void settings2bytes(settings_t *settings, uint8_t *bytes)
+{
+    bytes[0] = (uint8_t)(((settings->index)>>8) & 0x00FF);
+    bytes[1] = (uint8_t)(settings->index & 0x00FF);
+
+    bytes[2] = (uint8_t)(((settings->setpoint)>>8) & 0x00FF);
+    bytes[3] = (uint8_t)(settings->setpoint & 0x00FF);
+    
+    bytes[4] = (uint8_t)(((settings->user_max)>>8) & 0x00FF);
+    bytes[5] = (uint8_t)(settings->user_max & 0x00FF);
+    
+    bytes[6] = (uint8_t)(((settings->user_min)>>8) & 0x00FF);
+    bytes[7] = (uint8_t)(settings->user_min & 0x00FF);
+    
+    bytes[8] = settings->curva;
+    
+    bytes[9] = settings->time.sec;
+    bytes[10] = settings->time.min;
+    bytes[11] = settings->time.hour;
+    bytes[12] = settings->time.weekday;
+    bytes[13] = settings->time.day;
+    bytes[14] = settings->time.month;
+    bytes[15] = settings->time.year;
+}
+
+void bytes2settings(settings_t *settings, uint8_t *bytes)
+{
+    settings->index = ((bytes[0]<<8) & 0xFF00) | bytes[1];
+    settings->setpoint = ((bytes[2]<<8) & 0xFF00) | bytes[3];
+    settings->user_max = ((bytes[4]<<8) & 0xFF00) | bytes[5];
+    settings->user_min = ((bytes[6]<<8) & 0xFF00) | bytes[7];
+    
+    settings->curva = bytes[8];
+    settings->time.sec = bytes[9];
+    settings->time.min = bytes[10];
+    settings->time.hour = bytes[11];
+    settings->time.weekday = bytes[12];
+    settings->time.day = bytes[13];
+    settings->time.month = bytes[14];
+    settings->time.year = bytes[15];
+}
+
+
 
 void irq_gpio(uint gpio, uint32_t events)
 {
