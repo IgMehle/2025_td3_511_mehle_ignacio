@@ -46,8 +46,7 @@ pico_enable_stdio_usb(pico1-cli 1)
 
 # Add the standard library to the build
 target_link_libraries(pico1-cli
-        pico_stdlib
-        hardware_uart)
+        pico_stdlib)
 
 # Add the standard include files to the build
 target_include_directories(pico1-cli PRIVATE

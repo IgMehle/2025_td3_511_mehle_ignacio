@@ -1,0 +1,19 @@
+uart_get_lux()
+Paso escritura en q_lux a Overwrite y lectura a Peek porque voy a acceder a la cola desde task_Control() y desde task_UART_RX
+Y siempre necesito el ultimo valor actualizado
+
+uart_eclear()
+Llamo directamente a la funcion clear_settings()
+
+uart_set_lux()
+Suspendo task_Config() para que no pise a la nueva escritura
+En task_Config() solo creo un nuevo setting, la tarea encargada de cada index es task_EEPROM()
+-Leo la hora en el rtc
+-Lleno un campo settings y envio a task_EEPROM() para que lo agregue y actualice
+-Doy sRefresh para que task_Control() levante el nuevo setting
+
+uart_set_rtc()
+Llamo a rtc_load() dentro de seccion critica
+
+uart_get_log()
+Llamo a la funcion log_settings()

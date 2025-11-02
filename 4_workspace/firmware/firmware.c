@@ -170,6 +170,8 @@ void uart_tx_send(const char *msg) {
 void uart_set_lux(const char *args)
 {
     settings_t settings = {0};
+    rtc_t time = {0};
+    eeprom_cmd_t ecmd;
     char buffer[UART_BUFFER_SIZE];
 
     // Copio args a buffer
@@ -230,6 +232,26 @@ void uart_set_lux(const char *args)
 
         token = strtok(NULL, " ");
     }
+
+    // Leo la hora en el rtc
+    xSemaphoreGive(sRTC);
+    taskYIELD();
+    xQueueReceive(qRTC, &time, portMAX_DELAY);
+    settings.time = time;
+
+    // settings -> EEPROM
+    xQueueSend(qEwrite, &settings, portMAX_DELAY);
+    ecmd = ECTRL_WRITE_SETTINGS;
+    xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
+    taskYIELD();
+
+    // DELAY 1SEG
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    // Doy la orden a task_Control para que refresque los datos
+    xSemaphoreGive(sRefresh);
+    // Saco de la suspension a task_Control Y task del luxometro
+    vTaskResume(tControl);
+    vTaskResume(tLuxo);
     
     // FOR TESTING
     // Confirmo que recibi los datos del nuevo setting
@@ -239,8 +261,8 @@ void uart_set_lux(const char *args)
 
 void uart_eclear(void)
 {
-    // clear_settings();
-    // FOR TESTING
+    clear_settings();
+    // FOR DEBUG
     printf("[OK] Comando de borrado recibido\n");
 }
 
@@ -280,12 +302,20 @@ void uart_set_rtc(const char *args)
         time.hour = hh;
         time.min = mm;
         time.sec = ss;
-        // FOR TESTING
-        printf("[OK] RTC_T recibido: %2d/%2d/%2d %1d %2d:%2d:%2d\n",
+
+        // ESCRIBO EN EL RTC EN BAREMETAL
+        // ------------------------------
+        taskENTER_CRITICAL();
+        rtc_load(time);
+        taskEXIT_CRITICAL();
+        // ------------------------------
+
+        // FOR DEBUG
+        printf("[OK] RTC_T recibido: %2d/%2d/%2d %1d %2d:%2d:%2d\r\n",
         time.day, time.month, time.year, time.weekday,
         time.hour, time.min, time.sec);
     }
-    // FOR TESTING
+    // FOR DEBUG
     else printf("[RTC] Error de formato de fecha y hora\n");
     
 }
@@ -294,11 +324,16 @@ void uart_get_lux(void)
 {
     static char msg[32];
     static uint16_t lux_actual = 1111;
-    // LEER LUX
-    // ----------------
-    // ECHO UART
-    snprintf(msg, sizeof(msg), "Lux = %5d\r\n", lux_actual);
-    uart_tx_send(msg);
+    /* LEER LUX
+    * Hay lectura del luxometro ?
+    * Como la cola es recibida tambien dentro de task_Control()
+    * Vamos a trabajar con Overwrite y Peek para que ambas no se pisen
+    */
+    if(xQueuePeek(qLUX, &lux_actual, 0)){
+        snprintf(msg, sizeof(msg), "Lux = %5d\r\n", lux_actual);
+        uart_tx_send(msg);
+    }
+    else printf("[LUX] Error de lectura de lux\r\n");
     // FOR DEBUG
     printf("[OK] Comando de lectura de lux recibido\n");
 }
@@ -953,7 +988,7 @@ void log_settings(void)
         // Recibo de cola response con un timeout
         if(xQueueReceive(dump.responseQueue, &settings, pdMS_TO_TICKS(100)) == pdPASS){
             // Mientras pueda recibir de la cola, imprimo el registro
-            printf("%d: (%02d/%02d %02d:%02d:%02d) Lux: %d, Max: %d, Min: %d, Curva: %d\n",
+            printf("[%3d] (%02d/%02d %02d:%02d:%02d) Lux: %d, Max: %d, Min: %d, Curva: %d\n",
                 settings.index, settings.time.day, settings.time.month,
                 settings.time.hour, settings.time.min,
                 settings.time.sec, settings.setpoint, settings.user_max,
@@ -1208,7 +1243,8 @@ void task_BH1750(void *pvParams)
             bh1750_init(ONESHOT_LORES);
             xSemaphoreGive(mI2C);
             // Paso a la cola
-            xQueueSend(qLUX, &lux, portMAX_DELAY);
+            // Como leo de task_Control y task_UART_RX trabajo con Overwrite
+            xQueueOverwrite(qLUX, &lux);
         }
         // Corre cada LUX_TIME
         vTaskDelayUntil(&last_tick, pdMS_TO_TICKS(LUX_TIME));
@@ -1296,8 +1332,7 @@ void task_Control(void *pvParams)
             //kd = kp*td;
         }
         // Hay lectura del luxometro ?
-        // No lo hacemos bloqueante para que pueda imprimir dentro del tiempo de medicion
-        if(xQueueReceive(qLUX, &lux, 0) == pdPASS){
+        if(xQueuePeek(qLUX, &lux, 0) == pdPASS){
             //////////////////////////////////////////
             ///// CONTROL PID ////////////////////////
             // ap = kp*error;

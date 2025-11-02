@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <string.h>
 #include "pico/stdlib.h"
-#include "hardware/uart.h"
 #include "tusb.h"
 
 #define UART_ID uart0
