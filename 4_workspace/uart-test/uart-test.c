@@ -51,8 +51,12 @@ typedef struct settings {
 
 void uart_tx_send(const char *msg) {
     if (q_uart_tx == NULL) return;
-    // Encolar mensaje (se copia localmente)
-    xQueueSend(q_uart_tx, msg, 0);
+
+    char buffer[UART_BUFFER_SIZE];
+    strncpy(buffer, msg, sizeof(buffer));
+    buffer[UART_BUFFER_SIZE - 1] = '\0';
+
+    xQueueSend(q_uart_tx, buffer, 0);
 }
 
 void uart_set_lux(const char *args)
@@ -317,7 +321,7 @@ void task_UART_TX(void *pvParams) {
 
     for (;;) {
         // Espera un mensaje en la cola para enviar
-        if (xQueueReceive(q_uart_tx, &tx_buffer, portMAX_DELAY) == pdTRUE) {
+        if (xQueueReceive(q_uart_tx, tx_buffer, portMAX_DELAY) == pdTRUE) {
             uart_puts(UART_ID, tx_buffer);
         }
     }
