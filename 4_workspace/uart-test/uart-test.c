@@ -9,6 +9,8 @@
 #include "queue.h"
 #include "semphr.h"
 
+#define LED_RUN_PIN     25
+
 #define UART_ID uart0
 #define UART_TX_PIN 0
 #define UART_RX_PIN 1
@@ -321,9 +323,24 @@ void task_UART_TX(void *pvParams) {
     }
 }
 
+void task_LedRun(void *pvParams)
+{
+    for(;;){
+        gpio_put(LED_RUN_PIN, true);
+        vTaskDelay(pdMS_TO_TICKS(500));
+        gpio_put(LED_RUN_PIN, false);
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+}
+
 int main()
 {
     stdio_init_all();
+
+    // Init LED RUN
+    gpio_init(LED_RUN_PIN);
+    gpio_set_dir(LED_RUN_PIN, true);
+    gpio_put(LED_RUN_PIN, true);
 
     // INIT UART0 
     uart_init(UART_ID, UART_BAUDRATE);
@@ -342,6 +359,7 @@ int main()
     q_uart_tx = xQueueCreate(8, UART_BUFFER_SIZE);
 
     // Creo tareas
+    xTaskCreate(task_LedRun, "RUN", 128, NULL, 1, NULL);
     xTaskCreate(task_UART_RX, "UART-RX", 512, NULL, 2, NULL);
     xTaskCreate(task_UART_TX, "UART-TX", 512, NULL, 1, NULL);
 
