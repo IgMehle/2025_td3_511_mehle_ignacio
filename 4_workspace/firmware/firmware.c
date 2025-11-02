@@ -73,10 +73,9 @@
 // set eclear
 // set rtc "day/month/year weekday hour:min:seg"
 
-static char rx_buffer[UART_BUFFER_SIZE];
-static uint16_t rx_index = 0;
-// Queue de manejo de uart
-QueueHandle_t q_uart = NULL;
+// Queues de manejo de uart
+QueueHandle_t q_uart_rx = NULL;
+QueueHandle_t q_uart_tx = NULL;
 // --------------------------------------
 
 // Handles de tareas
@@ -161,6 +160,12 @@ typedef struct dumpreq {
 //volatile uint8_t toggle2 = 0;
 //lut_t lut[101];
 
+void uart_tx_send(const char *msg) {
+    if (q_uart_tx == NULL) return;
+    // Encolar mensaje (se copia localmente)
+    xQueueSend(q_uart_tx, msg, 0);
+}
+
 void uart_set_lux(const char *args)
 {
     settings_t settings = {0};
@@ -234,6 +239,7 @@ void uart_set_lux(const char *args)
 void uart_eclear(void)
 {
     // clear_settings();
+    // FOR TESTING
     printf("[OK] Comando de borrado recibido\n");
 }
 
@@ -285,18 +291,36 @@ void uart_set_rtc(const char *args)
 
 void uart_get_lux(void)
 {
+    static char msg[32];
+    static uint16_t lux_actual = 1111;
+    // LEER LUX
+    // ----------------
+    // ECHO UART
+    snprintf(msg, sizeof(msg), "Lux = %5d\r\n", lux_actual);
+    uart_tx_send(msg);
+    // FOR DEBUG
     printf("[OK] Comando de lectura de lux recibido\n");
 }
 
 void uart_get_log(void)
 {
+    char msg[UART_BUFFER_SIZE];
     // log_settings();
+
+    // ECHO UART
+    // "[OK] Lux = 1111 - Max = 2222 - Min = 999 - Curva: RAPIDA\n"
+   
+    snprintf(msg, sizeof(msg), "[OK] Lux = 1111 - Max = 2222 - Min = 999 - Curva: RAPIDA\r\n");
+    uart_tx_send(msg);
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    // FOR DEBUG
     printf("[OK] Comando de dump log recibido\n");
 }
 
 void uart_cmd_set(const char *args) {
-    #warning "Implementar uart_set()"
-    printf("[CMD] uart_set() recibido: %s\n", args);
+    //#warning "Implementar uart_set()"
+    printf("[UART] uart_set() recibido: %s\n", args);
     /*--- OPCIONES ---
     // set lux args
     // set eclear
@@ -329,8 +353,8 @@ void uart_cmd_set(const char *args) {
 }
 
 void uart_cmd_get(const char *args) {
-    #warning "Implementar uart_get()"
-    printf("[CMD] uart_get() recibido: %s\n", args);
+    //#warning "Implementar uart_get()"
+    printf("[UART] uart_get() recibido: %s\n", args);
     /*--- OPCIONES ---
     // get lux
     // get log
@@ -358,53 +382,54 @@ void uart_cmd_get(const char *args) {
 }
 
 /* ISR de recepción UART */
-void on_uart_rx() {
+void ISR_uart_rx() {
+    static char uart_rx_buffer[UART_BUFFER_SIZE];
+    static uint16_t uart_rx_index = 0;
+
     while (uart_is_readable(UART_ID)) {
         char c = uart_getc(UART_ID);
 
         if (c == '\r' || c == '\n') {
-            if (rx_index > 0) {
-                rx_buffer[rx_index] = '\0';
+            if (uart_rx_index > 0) {
+                uart_rx_buffer[uart_rx_index] = '\0';
                 BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-                xQueueSendFromISR(q_uart, rx_buffer, &xHigherPriorityTaskWoken);
-                rx_index = 0;
+                xQueueSendFromISR(q_uart_rx, uart_rx_buffer, &xHigherPriorityTaskWoken);
+                uart_rx_index = 0;
                 portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
             }
-        } else if (rx_index < UART_BUFFER_SIZE - 1) {
-            rx_buffer[rx_index++] = c;
+        } else if (uart_rx_index < UART_BUFFER_SIZE - 1) {
+            uart_rx_buffer[uart_rx_index++] = c;
         }
     }
 }
 
-/* Inicialización de la UART */
-static void uart_init_task() {
-    uart_init(UART_ID, UART_BAUDRATE);
-    gpio_set_function(UART_TX_PIN, GPIO_FUNC_UART);
-    gpio_set_function(UART_RX_PIN, GPIO_FUNC_UART);
-
-    uart_set_hw_flow(UART_ID, false, false);
-    uart_set_format(UART_ID, 8, 1, UART_PARITY_NONE);
-    uart_set_fifo_enabled(UART_ID, false);
-
-    irq_set_exclusive_handler(UART0_IRQ, on_uart_rx);
-    irq_set_enabled(UART0_IRQ, true);
-    uart_set_irq_enables(UART_ID, true, false);
-}
-
-/* Tarea principal de la UART */
-void task_UART(void *pvParameters) {
-    char cmd_buffer[UART_BUFFER_SIZE];
-
-    uart_init_task();
-    q_uart = xQueueCreate(4, UART_BUFFER_SIZE);
+/* Tarea RX de la UART */
+void task_UART_RX(void *pvParams) {
+    // BUFFER
+    char rx_buffer[UART_BUFFER_SIZE];
 
     for (;;) {
-        if (xQueueReceive(q_uart, cmd_buffer, portMAX_DELAY) == pdTRUE) {
-            if (strncmp(cmd_buffer, "set", 3) == 0)
-                uart_cmd_set(cmd_buffer);
-            else if (strncmp(cmd_buffer, "get", 3) == 0)
-                uart_cmd_get(cmd_buffer);
-            else printf("[UART] Comando desconocido: %s\n", cmd_buffer);
+        if (xQueueReceive(q_uart_rx, rx_buffer, portMAX_DELAY) == pdTRUE) {
+            // COMANDO SET (ESCRIBIR DATOS)
+            if (strncmp(rx_buffer, "set", 3) == 0)
+                uart_cmd_set(rx_buffer);
+            // COMANDO GET (TRAER DATOS)
+            else if (strncmp(rx_buffer, "get", 3) == 0)
+                uart_cmd_get(rx_buffer);
+            else printf("[UART] Comando desconocido: %s\n", rx_buffer);
+        }
+    }
+}
+
+/* Tarea TX de la UART */
+void task_UART_TX(void *pvParams) {
+    // BUFFER
+    char tx_buffer[UART_BUFFER_SIZE];
+
+    for (;;) {
+        // Espera un mensaje en la cola para enviar
+        if (xQueueReceive(q_uart_tx, &tx_buffer, portMAX_DELAY) == pdTRUE) {
+            uart_puts(UART_ID, tx_buffer);
         }
     }
 }
@@ -451,9 +476,7 @@ void bytes2settings(settings_t *settings, uint8_t *bytes)
     settings->time.year = bytes[15];
 }
 
-
-
-void irq_gpio(uint gpio, uint32_t events)
+void ISR_gpio(uint gpio, uint32_t events)
 {
     static BaseType_t taskWoken = pdFALSE;
     uint8_t cmd;
@@ -1410,6 +1433,18 @@ int main()
 {
     stdio_init_all();
 
+    // INIT UART0 
+    uart_init(UART_ID, UART_BAUDRATE);
+    gpio_set_function(UART_TX_PIN, GPIO_FUNC_UART);
+    gpio_set_function(UART_RX_PIN, GPIO_FUNC_UART);
+    uart_set_hw_flow(UART_ID, false, false);
+    uart_set_format(UART_ID, 8, 1, UART_PARITY_NONE);
+    uart_set_fifo_enabled(UART_ID, false);
+    // IRQ UART RX
+    irq_set_exclusive_handler(UART0_IRQ, ISR_uart_rx);
+    irq_set_enabled(UART0_IRQ, true);
+    uart_set_irq_enables(UART_ID, true, false);
+
     // INIT GPIO INPUT PINS
     gpio_init(ENC_A_PIN);
     gpio_init(ENC_B_PIN);
@@ -1419,7 +1454,7 @@ int main()
     gpio_set_dir(ENC_B_PIN, false);
     gpio_set_dir(PULS_PIN, false);
     // Habilito las IRQ
-    gpio_set_irq_enabled_with_callback(PULS_PIN, GPIO_IRQ_EDGE_RISE, true, &irq_gpio);
+    gpio_set_irq_enabled_with_callback(PULS_PIN, GPIO_IRQ_EDGE_RISE, true, &ISR_gpio);
     gpio_set_irq_enabled(ENC_A_PIN, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true);
     gpio_set_irq_enabled(ENC_B_PIN, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true);
 
@@ -1519,13 +1554,17 @@ int main()
     mI2C = xSemaphoreCreateMutex();
     xSemaphoreGive(mI2C);
 
-    // Creo queues
+    // Creo queues intertarea
     qIRQ = xQueueCreate(1, sizeof(uint8_t));
     qCTRL = xQueueCreate(1, sizeof(char));
     qLCD = xQueueCreate(1, sizeof(qLCD_t));
     qRTC = xQueueCreate(1, sizeof(rtc_t));
     qLUX = xQueueCreate(1, sizeof(uint16_t));
     qPWM = xQueueCreate(1, sizeof(float));
+
+    // Creo queues de UART
+    q_uart_rx = xQueueCreate(4, UART_BUFFER_SIZE);
+    q_uart_tx = xQueueCreate(8, UART_BUFFER_SIZE);
 
     // Creo queue de comando de eeprom
     qEcontrol = xQueueCreate(1, sizeof(uint8_t));
@@ -1549,7 +1588,8 @@ int main()
     xTaskCreate(task_EEPROM, "EEPROM", 1024, NULL, 4, NULL);
     xTaskCreate(task_Encoder, "Encoder", 128, NULL, 5, NULL);
     //xTaskCreate(task_Setup, "SETUP", 1024, NULL, 6, NULL);
-    xTaskCreate(task_UART, "UART", 512, NULL, 2, NULL);
+    xTaskCreate(task_UART_RX, "UART-RX", 512, NULL, 2, NULL);
+    xTaskCreate(task_UART_TX, "UART-TX", 512, NULL, 1, NULL);
 
     // Enciendo el scheduler
     vTaskStartScheduler();
