@@ -15,9 +15,9 @@ if(WIN32)
 else()
     set(USERHOME $ENV{HOME})
 endif()
-set(sdkVersion 2.1.1)
+set(sdkVersion 2.2.0)
 set(toolchainVersion 14_2_Rel1)
-set(picotoolVersion 2.1.1)
+set(picotoolVersion 2.2.0-a4)
 set(picoVscode ${USERHOME}/.pico-sdk/cmake/pico-vscode.cmake)
 if (EXISTS ${picoVscode})
     include(${picoVscode})
@@ -28,53 +28,39 @@ set(PICO_BOARD pico2 CACHE STRING "Board type")
 # Pull in Raspberry Pi Pico SDK (must be before project)
 include(pico_sdk_import.cmake)
 
-project(firmware C CXX ASM)
+project(uart-test C CXX ASM)
 
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
 
-add_executable(firmware firmware.c )
+add_executable(uart-test uart-test.c )
 
-pico_set_program_name(firmware "firmware")
-pico_set_program_version(firmware "0.1")
+pico_set_program_name(uart-test "uart-test")
+pico_set_program_version(uart-test "0.1")
 
 # Modify the below lines to enable/disable output over UART/USB
-pico_enable_stdio_uart(firmware 0)
-pico_enable_stdio_usb(firmware 1)
+pico_enable_stdio_uart(uart-test 0)
+pico_enable_stdio_usb(uart-test 1)
 
 # Configuración adicional de FreeRTOS de la aplicación (si el archivo existe)
 set(FREERTOS_USER_CONFIG "${CMAKE_CURRENT_LIST_DIR}" CACHE PATH "User FreeRTOSConfig path")
 # Habilito uso de memoria dinámica
 set(FREERTOS_SUPPORT_DYNAMIC_ALLOCATION "ON" CACHE PATH "FreeRTOS dynamic memory implementation support")
 
-# set(FREERTOS_SUPPORT_DYNAMIC_ALLOCATION "ON")
-
 # Add external FreeRTOS library
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../freertos ${CMAKE_BINARY_DIR}/freertos)
-# Agrego subdirectorios de librerias
-add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/bh1750 ${CMAKE_BINARY_DIR}/bh1750)
-add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/ds3231 ${CMAKE_BINARY_DIR}/ds3231)
-add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/at24c32 ${CMAKE_BINARY_DIR}/at24c32)
-add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/lcd ${CMAKE_BINARY_DIR}/lcd)
 
 # Add the standard library to the build
-target_link_libraries(firmware
+target_link_libraries(uart-test
         pico_stdlib
-        hardware_i2c
-        hardware_pwm
-        hardware_clocks
         hardware_irq
-        freertos
-        bh1750
-        ds3231
-        at24c32
-        lcd)
+        freertos)
 
 # Add the standard include files to the build
-target_include_directories(firmware PRIVATE
+target_include_directories(uart-test PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}
 )
 
-pico_add_extra_outputs(firmware)
+pico_add_extra_outputs(uart-test)

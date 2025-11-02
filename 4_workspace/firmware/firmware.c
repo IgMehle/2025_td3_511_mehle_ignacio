@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
 #include "hardware/pwm.h"
@@ -278,7 +279,7 @@ void uart_set_rtc(const char *args)
         time.weekday = wd;
         time.hour = hh;
         time.min = mm;
-        time.seg = ss;
+        time.sec = ss;
         // FOR TESTING
         printf("[OK] RTC_T recibido: %2d/%2d/%2d %1d %2d:%2d:%2d\n",
         time.day, time.month, time.year, time.weekday,
@@ -1591,7 +1592,7 @@ int main()
     xTaskCreate(task_UART_RX, "UART-RX", 512, NULL, 2, NULL);
     xTaskCreate(task_UART_TX, "UART-TX", 512, NULL, 1, NULL);
 
-    // Enciendo el scheduler
+    // START SCHEDULER
     vTaskStartScheduler();
     while (true);
 }
