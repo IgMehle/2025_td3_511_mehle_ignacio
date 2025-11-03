@@ -189,7 +189,7 @@ void uart_get_lux(void)
     // LEER LUX
     // ----------------
     // ECHO UART
-    snprintf(msg, sizeof(msg), "Lux = %5d\r\n", lux_actual);
+    snprintf(msg, sizeof(msg), "Lux = %5d\n", lux_actual);
     uart_tx_send(msg);
     // FOR DEBUG
     printf("[OK] Comando de lectura de lux recibido\n");
@@ -202,10 +202,12 @@ void uart_get_log(void)
 
     // ECHO UART
     // "[OK] Lux = 1111 - Max = 2222 - Min = 999 - Curva: RAPIDA\n"
-   
-    snprintf(msg, sizeof(msg), "[OK] Lux = 1111 - Max = 2222 - Min = 999 - Curva: RAPIDA\r\n");
-    uart_tx_send(msg);
-    vTaskDelay(pdMS_TO_TICKS(10));
+    for(uint8_t i = 0; i < 5; i++){
+        snprintf(msg, sizeof(msg), "[OK] Lux = %5d - Max = %5d - Min = %5d - Curva: RAPIDA\n",
+            i+1000, i+1200, i+800);
+        uart_tx_send(msg);
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
 
     // FOR DEBUG
     printf("[OK] Comando de dump log recibido\n");

@@ -32,73 +32,61 @@ int main() {
 
     char line[MAX_LINE_LENGTH];
     char rx_buf[MAX_LINE_LENGTH];
-    size_t line_pos = 0;
-    size_t rx_pos = 0;
+    size_t line_pos = 0, rx_pos = 0;
+    bool show_prompt = true;
 
-    while (true) {
-        printf(">> ");
-        fflush(stdout);
+    for (;;) {
+        if (show_prompt) {
+            printf(">> ");
+            fflush(stdout);
+            show_prompt = false;
+        }
 
-        // Lectura manual con eco
-        line_pos = 0;
-        while (true) {
-            int ch = getchar_timeout_us(0);
-            if (ch == PICO_ERROR_TIMEOUT) {
-                // Procesar UART RX en paralelo
-                if (uart_is_readable(UART_ID)) {
-                    char c = uart_getc(UART_ID);
-                    if (c == '\r') continue;
-                    if (c == '\n' || rx_pos >= sizeof(rx_buf) - 1) {
-                        rx_buf[rx_pos] = '\0';
-                        if (rx_pos > 0) {
-                            printf("\n[RX] \"%s\"\n", rx_buf);
-                            rx_pos = 0;
-                            printf(">> ");  // reimprimir prompt
-                            fflush(stdout);
-                        }
-                    } else {
-                        rx_buf[rx_pos++] = c;
-                    }
-                }
-                tight_loop_contents();
-                continue;
-            }
-
-            // Manejar ENTER
+        // Leer caracteres del USB (entrada del usuario)
+        int ch = getchar_timeout_us(0);
+        if (ch != PICO_ERROR_TIMEOUT) {
             if (ch == '\r' || ch == '\n') {
                 putchar('\n');
                 line[line_pos] = '\0';
-                break;
-            }
-
-            // Backspace
-            if (ch == 8 || ch == 127) {
                 if (line_pos > 0) {
-                    line_pos--;
-                    printf("\b \b");
-                    fflush(stdout);
-                }
-                continue;
-            }
+                    uart_write_blocking(UART_ID, (uint8_t *)line, line_pos);
+                    uart_putc_raw(UART_ID, '\n');
 
-            // Almacenar y hacer eco
-            if (line_pos < MAX_LINE_LENGTH - 1) {
+                    gpio_put(LED_PIN, 1);
+                    sleep_ms(50);
+                    gpio_put(LED_PIN, 0);
+
+                    printf("[TX] \"%s\"\n", line);
+                    line_pos = 0;
+                }
+                show_prompt = true;
+            } else if ((ch == 8 || ch == 127) && line_pos > 0) {
+                line_pos--;
+                printf("\b \b");
+                fflush(stdout);
+            } else if (ch >= 32 && line_pos < MAX_LINE_LENGTH - 1) {
                 line[line_pos++] = ch;
                 putchar(ch);
                 fflush(stdout);
             }
         }
 
-        if (line_pos == 0) continue;
+        // Leer caracteres entrantes del UART
+        while (uart_is_readable(UART_ID)) {
+            char c = uart_getc(UART_ID);
+            if (c == '\r') continue;  // ignorar CR
+            if (c == '\n') {
+                if (rx_pos > 0) {
+                    rx_buf[rx_pos] = '\0';
+                    printf("\n[RX] \"%s\"\n", rx_buf);
+                    rx_pos = 0;
+                    show_prompt = true;
+                }
+            } else if (rx_pos < sizeof(rx_buf) - 1) {
+                rx_buf[rx_pos++] = c;
+            }
+        }
 
-        // Enviar línea por UART
-        uart_write_blocking(UART_ID, (uint8_t*)line, line_pos);
-        uart_putc_raw(UART_ID, '\n');
-
-        gpio_put(LED_PIN, 1);
-        sleep_ms(60);
-        gpio_put(LED_PIN, 0);
-
-        printf("[TX] \"%s\"\n", line);
+        tight_loop_contents();
     }
 }
