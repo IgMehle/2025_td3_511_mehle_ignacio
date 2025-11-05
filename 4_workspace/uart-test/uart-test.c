@@ -50,7 +50,7 @@ typedef struct settings {
 } settings_t;
 
 void uart_tx_send(const char *msg) {
-    if (q_uart_tx == NULL) return;
+    //if (q_uart_tx == NULL) return;
 
     char buffer[UART_BUFFER_SIZE];
     strncpy(buffer, msg, sizeof(buffer));
@@ -132,7 +132,7 @@ void uart_set_lux(const char *args)
 void uart_eclear(void)
 {
     // clear_settings();
-    // FOR TESTING
+    // FOR DEBUG
     printf("[OK] Comando de borrado recibido\n");
 }
 
@@ -184,13 +184,15 @@ void uart_set_rtc(const char *args)
 
 void uart_get_lux(void)
 {
-    static char msg[32];
+    char msg[32];
     static uint16_t lux_actual = 1111;
     // LEER LUX
     // ----------------
-    // ECHO UART
+    // Armo string
     snprintf(msg, sizeof(msg), "Lux = %5d\n", lux_actual);
-    uart_tx_send(msg);
+    // Encolo el mensaje a UART_TX
+    // uart_tx_send(msg);
+    xQueueSend(q_uart_tx, msg, 0);
     // FOR DEBUG
     printf("[OK] Comando de lectura de lux recibido\n");
 }
@@ -198,19 +200,22 @@ void uart_get_lux(void)
 void uart_get_log(void)
 {
     char msg[UART_BUFFER_SIZE];
+
+    // FOR DEBUG
+    printf("[OK] Comando de dump log recibido\n");
     // log_settings();
 
-    // ECHO UART
+    // Armo string
     // "[OK] Lux = 1111 - Max = 2222 - Min = 999 - Curva: RAPIDA\n"
     for(uint8_t i = 0; i < 5; i++){
         snprintf(msg, sizeof(msg), "[OK] Lux = %5d - Max = %5d - Min = %5d - Curva: RAPIDA\n",
             i+1000, i+1200, i+800);
-        uart_tx_send(msg);
+        // Encolo strings a UART_TX
+        // uart_tx_send(msg);
+        xQueueSend(q_uart_tx, msg, 0);
+        // Delay para refresh de buffers en recepcion
         vTaskDelay(pdMS_TO_TICKS(100));
     }
-
-    // FOR DEBUG
-    printf("[OK] Comando de dump log recibido\n");
 }
 
 void uart_cmd_set(const char *args) {
@@ -324,6 +329,9 @@ void task_UART_TX(void *pvParams) {
     for (;;) {
         // Espera un mensaje en la cola para enviar
         if (xQueueReceive(q_uart_tx, tx_buffer, portMAX_DELAY) == pdTRUE) {
+            // Aseguro terminacion de linea
+            tx_buffer[UART_BUFFER_SIZE - 1] = '\0';
+            // Mando string a la uart
             uart_puts(UART_ID, tx_buffer);
         }
     }
