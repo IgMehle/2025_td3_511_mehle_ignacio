@@ -22,7 +22,7 @@
 // get lux
 // get log
 // set eclear
-// set rtc "day/month/year weekday hour:min:seg"
+// set rtc day/month/year weekday hour:min:seg
 
 // Queues de manejo de uart
 QueueHandle_t q_uart_rx = NULL;
@@ -139,11 +139,14 @@ void uart_eclear(void)
 void uart_set_rtc(const char *args)
 {
     rtc_t time = {0};
-    uint8_t d, m, y, wd, hh, mm, ss;
+    // uint8_t d0, d1, m0, m1, y0, y1, wd, hh0, hh1, mm0, mm1, ss0, ss1;
+    uint8_t day, month, year, weekday, hour, minute, second;
+    //uint8_t d, m, y, wd, hh, mm, ss;
+    int parsed;
     /* STRING ESPERADA
-    * <set rtc "day/month/year weekday hour:min:seg"> 
+    * "set rtc day/month/year weekday hour:min:seg"
     * 1) separar set y rtc (hardcodeado con puntero)
-    * 2) tomar el string entre comillas
+    * 2) tomar el string de fecha y hora
     * 3) parsear con sscanf()
     */
     char buffer[24];
@@ -162,21 +165,50 @@ void uart_set_rtc(const char *args)
     * corresponda a un especificador de tipo en la serie-formato.
     */
     // Deserializo con sscanf()
-    int parsed = sscanf(buffer, "%hhu/%hhu/%hhu %hhu %hhu:%hhu:%hhu",
-                        &d, &m, &y, &wd, &hh, &mm, &ss);
-    if(parsed == 7){
-        time.day = d;
-        time.month = m;
-        time.year = y;
+
+    // DE A 1 DIGITO
+    /* parsed = sscanf(buffer,
+        "%1hhu%1hhu/"   // day
+        "%1hhu%1hhu/"   // month
+        "%1hhu%1hhu "   // year
+        "%1hhu "        // weekday
+        "%1hhu%1hhu:"   // hour
+        "%1hhu%1hhu:"   // min
+        "%1hhu%1hhu",   // sec
+        &d0, &d1, &m0, &m1, &y0, &y1, 
+        &wd, &hh0, &hh1, &mm0, &mm1, &ss0, &ss1);
+
+    if(parsed == 13){
+        time.day = d0 + 10*d1;
+        time.month = m0 + 10*m1;
+        time.year = y0 + 10*y1;
         time.weekday = wd;
-        time.hour = hh;
-        time.min = mm;
-        time.sec = ss;
+        time.hour = hh0 + 10*hh1;
+        time.min = mm0 + 10*mm1;
+        time.sec = ss0 * 10*ss1;
+        // FOR TESTING
+        printf("[OK] RTC_T recibido: %2d/%2d/%2d %1d %2d:%2d:%2d\n",
+        time.day, time.month, time.year, time.weekday,
+        time.hour, time.min, time.sec);
+    } */
+    // DE A 2 DIGITOS
+    parsed = sscanf(buffer, "%2hhu/%2hhu/%2hhu %1hhu %2hhu:%2hhu:%2hhu",
+            &day, &month, &year, &weekday, &hour, &minute, &second);
+    
+    if(parsed == 7){
+        time.day = day;
+        time.month = month;
+        time.year = year;
+        time.weekday = weekday;
+        time.hour = hour;
+        time.min = minute;
+        time.sec = second;
         // FOR TESTING
         printf("[OK] RTC_T recibido: %2d/%2d/%2d %1d %2d:%2d:%2d\n",
         time.day, time.month, time.year, time.weekday,
         time.hour, time.min, time.sec);
     }
+
     // FOR TESTING
     else printf("[RTC] Error de formato de fecha y hora\n");
     
