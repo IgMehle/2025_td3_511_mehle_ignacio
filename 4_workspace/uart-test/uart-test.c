@@ -49,7 +49,7 @@ typedef struct settings {
     rtc_t time; // 7B
 } settings_t;
 
-void uart_tx_send(const char *msg) {
+/* void uart_tx_send(const char *msg) {
     //if (q_uart_tx == NULL) return;
 
     char buffer[UART_BUFFER_SIZE];
@@ -57,9 +57,9 @@ void uart_tx_send(const char *msg) {
     buffer[UART_BUFFER_SIZE - 1] = '\0';
 
     xQueueSend(q_uart_tx, buffer, 0);
-}
+} */
 
-void uart_set_lux(const char *args)
+uint8_t uart_set_lux(const char *args)
 {
     settings_t settings = {0};
     char buffer[UART_BUFFER_SIZE];
@@ -122,21 +122,25 @@ void uart_set_lux(const char *args)
 
         token = strtok(NULL, " ");
     }
-    
-    // FOR TESTING
+    // FOR DEBUG
     // Confirmo que recibi los datos del nuevo setting
     printf("[OK] Lux = %5d - Max = %5d - Min: %5d - Curva: %1d\n",
          settings.setpoint, settings.user_max, settings.user_min, settings.curva);
+
+    // Mando ACK de recepcion de datos
+    return 0;
 }
 
-void uart_eclear(void)
+uint8_t uart_eclear(void)
 {
     // clear_settings();
     // FOR DEBUG
     printf("[OK] Comando de borrado recibido\n");
+    // Mando ACK de recepcion de datos
+    return 0;
 }
 
-void uart_set_rtc(const char *args)
+uint8_t uart_set_rtc(const char *args)
 {
     rtc_t time = {0};
     // uint8_t d0, d1, m0, m1, y0, y1, wd, hh0, hh1, mm0, mm1, ss0, ss1;
@@ -211,19 +215,21 @@ void uart_set_rtc(const char *args)
 
     // FOR TESTING
     else printf("[RTC] Error de formato de fecha y hora\n");
-    
+    // Mando ACK de recepcion de datos
+    return 0;
 }
 
 void uart_get_lux(void)
 {
-    char msg[32];
+    char msg[UART_BUFFER_SIZE];
     static uint16_t lux_actual = 1111;
-    // LEER LUX
-    // ----------------
-    // Armo string
-    snprintf(msg, sizeof(msg), "Lux = %5d\n", lux_actual);
+    static uint16_t max_actual = 2222;
+    static uint16_t min_actual = 999;
+    // Armo string (demo)
+    snprintf(msg, sizeof(msg),
+        "[NOW] Lux = %5d - AL max = %5d - AL min = %5d - Curva = 0\n", 
+        lux_actual, max_actual, min_actual);
     // Encolo el mensaje a UART_TX
-    // uart_tx_send(msg);
     xQueueSend(q_uart_tx, msg, 0);
     // FOR DEBUG
     printf("[OK] Comando de lectura de lux recibido\n");
@@ -237,21 +243,22 @@ void uart_get_log(void)
     printf("[OK] Comando de dump log recibido\n");
     // log_settings();
 
-    // Armo string
+    // Armo string (DEMO)
     // "[OK] Lux = 1111 - Max = 2222 - Min = 999 - Curva: RAPIDA\n"
     for(uint8_t i = 0; i < 5; i++){
-        snprintf(msg, sizeof(msg), "[OK] Lux = %5d - Max = %5d - Min = %5d - Curva: RAPIDA\n",
-            i+1000, i+1200, i+800);
+        snprintf(msg, sizeof(msg), "[%03d] Lux = %5d - Max = %5d - Min = %5d - Curva: RAPIDA\n",
+            i, i+1000, i+1200, i+800);
         // Encolo strings a UART_TX
-        // uart_tx_send(msg);
         xQueueSend(q_uart_tx, msg, 0);
         // Delay para refresh de buffers en recepcion
         vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
-void uart_cmd_set(const char *args) {
-    //#warning "Implementar uart_set()"
+void uart_cmd_set(const char *args)
+{
+    uint8_t ack = 1; // clear si se ejecuta bien el comando
+    char msg[UART_BUFFER_SIZE];
     printf("[UART] uart_set() recibido: %s\n", args);
     /*--- OPCIONES ---
     // set lux args
@@ -271,21 +278,32 @@ void uart_cmd_set(const char *args) {
     // Desglose
     if(strncmp(opc, "lux", 3) == 0){
         // Opcion new setting
-        uart_set_lux(args);
+        ack = uart_set_lux(args);
     }
     else if(strncmp(opc, "rtc", 3) == 0){
         // Opcion set rtc
-        uart_set_rtc(args);
+        ack = uart_set_rtc(args);
     }
     else if(strncmp(opc, "eclear", 6) == 0){
         // Opcion clear eeprom
-        uart_eclear();
+        ack = uart_eclear();
     }
     else printf("[UART] Opcion desconocida: %s\n", opc);
+    // ENVIO ACK SI COMANDO OK
+    if(ack == 0){
+        snprintf(msg, sizeof(msg), "[ACK] Comando set %s OK\n", opc);
+        // Encolo string a UART_TX
+        xQueueSend(q_uart_tx, msg, 0);
+    }
+    else {
+        snprintf(msg, sizeof(msg), "[NACK] Comando set %s incorrecto\n", opc);
+        // Encolo string a UART_TX
+        xQueueSend(q_uart_tx, msg, 0);
+    }
 }
 
-void uart_cmd_get(const char *args) {
-    //#warning "Implementar uart_get()"
+void uart_cmd_get(const char *args) 
+{
     printf("[UART] uart_get() recibido: %s\n", args);
     /*--- OPCIONES ---
     // get lux
