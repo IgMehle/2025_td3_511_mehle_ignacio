@@ -241,7 +241,7 @@ void uart_set_lux(const char *args)
     }
 
     // Leo la hora en el rtc
-    xSemaphoreGive(sRTC);
+    /* xSemaphoreGive(sRTC);
     taskYIELD();
     xQueueReceive(qRTC, &time, portMAX_DELAY);
     settings.time = time;
@@ -258,7 +258,7 @@ void uart_set_lux(const char *args)
     xSemaphoreGive(sRefresh);
     // Saco de la suspension a task_Control Y task del luxometro
     vTaskResume(tControl);
-    vTaskResume(tLuxo);
+    vTaskResume(tLuxo); */
     
     // FOR TESTING
     // Confirmo que recibi los datos del nuevo setting
@@ -268,7 +268,7 @@ void uart_set_lux(const char *args)
 
 void uart_eclear(void)
 {
-    clear_settings();
+    // clear_settings();
     // FOR DEBUG
     printf("[OK] Comando de borrado recibido\n");
 }
@@ -313,9 +313,9 @@ void uart_set_rtc(const char *args)
 
         // ESCRIBO EN EL RTC EN BAREMETAL
         // ------------------------------
-        taskENTER_CRITICAL();
+        /* taskENTER_CRITICAL();
         rtc_load(time);
-        taskEXIT_CRITICAL();
+        taskEXIT_CRITICAL(); */
         // ------------------------------
 
         // FOR DEBUG
@@ -338,13 +338,13 @@ void uart_get_lux(void)
     * Como la cola es recibida tambien dentro de task_Control()
     * Vamos a trabajar con Overwrite y Peek para que ambas no se pisen
     */
-    if(xQueuePeek(qLUX, &lux_actual, 0)){
+    /* if(xQueuePeek(qLUX, &lux_actual, 0)){
         snprintf(msg, sizeof(msg), "Lux = %5d\n", lux_actual);
         // Encolo el mensaje a UART_TX
         // uart_tx_send(msg);
         xQueueSend(q_uart_tx, msg, 0);
     }
-    else printf("[LUX] Error de lectura de lux\n");
+    else printf("[LUX] Error de lectura de lux\n"); */
 }
 
 void uart_get_log(void)
@@ -353,7 +353,7 @@ void uart_get_log(void)
     // FOR DEBUG
     printf("[OK] Comando de dump log recibido\n");
 
-    log_settings();
+    //log_settings();
 }
 
 void uart_cmd_set(const char *args) {
@@ -1479,6 +1479,15 @@ void task_LedRun(void *pvParams)
     }
 }
 
+void error_init(char *task)
+{
+    printf("ERROR creando tarea %s\n", task);
+    gpio_put(LED_RUN_PIN, true); 
+    sleep_ms(100); 
+    gpio_put(LED_RUN_PIN, false); 
+    sleep_ms(100); 
+}
+
 int main()
 {
     stdio_init_all();
@@ -1628,18 +1637,35 @@ int main()
     qEreadcalib = xQueueCreate(1, 16U);
     qEdump = xQueueCreate(1, sizeof(eepromDumpRequest_t));
 
+    /* while(1){ 
+            printf("ERROR me clavo antes de crear tareas\n");
+            gpio_put(LED_RUN_PIN, true); 
+            sleep_ms(200); 
+            gpio_put(LED_RUN_PIN, false); 
+            sleep_ms(200); 
+        } */
+    BaseType_t xres;
     // Creo tareas
-    xTaskCreate(task_Control, "Control", 256, NULL, 1, &tControl);
-    xTaskCreate(task_Config, "Setear", 1024, NULL, 2, &tConfig);
-    xTaskCreate(task_LedRun, "Run", 128, NULL, 3, NULL);
-    xTaskCreate(task_BH1750, "BH1750", 128, NULL, 4, &tLuxo);
-    xTaskCreate(task_LCD, "LCD", 128, NULL, 4, NULL);
-    xTaskCreate(task_RTC, "RTC", 128, NULL, 4, NULL);
-    xTaskCreate(task_EEPROM, "EEPROM", 1024, NULL, 4, NULL);
-    xTaskCreate(task_Encoder, "Encoder", 128, NULL, 5, NULL);
-    //xTaskCreate(task_Setup, "SETUP", 1024, NULL, 6, NULL);
-    xTaskCreate(task_UART_RX, "UART-RX", 512, NULL, 2, NULL);
-    xTaskCreate(task_UART_TX, "UART-TX", 512, NULL, 1, NULL);
+    xres = xTaskCreate(task_Control, "Control", 256, NULL, 1, &tControl);
+    if (xres != pdPASS) error_init("Control");
+    xres = xTaskCreate(task_Config, "Config", 512, NULL, 2, &tConfig);
+    if (xres != pdPASS) error_init("Config");
+    xres = xTaskCreate(task_LedRun, "Run", 128, NULL, 3, NULL);
+    if (xres != pdPASS) error_init("Run");
+    xres = xTaskCreate(task_BH1750, "BH1750", 128, NULL, 4, &tLuxo);
+    if (xres != pdPASS) error_init("BH1750");
+    xres = xTaskCreate(task_LCD, "LCD", 128, NULL, 4, NULL);
+    if (xres != pdPASS) error_init("LCD");
+    xres = xTaskCreate(task_RTC, "RTC", 128, NULL, 4, NULL);
+    if (xres != pdPASS) error_init("RTC");
+    xres = xTaskCreate(task_EEPROM, "EEPROM", 512, NULL, 4, NULL);
+    if (xres != pdPASS) error_init("EEPROM");
+    xres = xTaskCreate(task_Encoder, "Encoder", 128, NULL, 5, NULL);
+    if (xres != pdPASS) error_init("Encoder");
+    //xres = xTaskCreate(task_UART_RX, "UART-RX", 512, NULL, 2, NULL);
+    //if (xres != pdPASS) error_init("UART-RX");
+    //xres = xTaskCreate(task_UART_TX, "UART-TX", 512, NULL, 1, NULL);
+    //if (xres != pdPASS) error_init("UART-TX");
 
     // START SCHEDULER
     vTaskStartScheduler();
