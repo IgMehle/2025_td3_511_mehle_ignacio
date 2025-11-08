@@ -984,7 +984,7 @@ void log_settings(void)
     // LOG UART
     char msg[UART_BUFFER_SIZE];
 
-    ///// DUMP DE SETTINGS POR CONSOLA /////
+    ///// DUMP DE SETTINGS POR UART /////
     ecmd = ECTRL_DUMP;
     xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
     taskYIELD();
@@ -1662,10 +1662,10 @@ int main()
     if (xres != pdPASS) error_init("EEPROM");
     xres = xTaskCreate(task_Encoder, "Encoder", 128, NULL, 5, NULL);
     if (xres != pdPASS) error_init("Encoder");
-    //xres = xTaskCreate(task_UART_RX, "UART-RX", 512, NULL, 2, NULL);
-    //if (xres != pdPASS) error_init("UART-RX");
-    //xres = xTaskCreate(task_UART_TX, "UART-TX", 512, NULL, 1, NULL);
-    //if (xres != pdPASS) error_init("UART-TX");
+    xres = xTaskCreate(task_UART_RX, "UART-RX", 512, NULL, 2, NULL);
+    if (xres != pdPASS) error_init("UART-RX");
+    xres = xTaskCreate(task_UART_TX, "UART-TX", 512, NULL, 1, NULL);
+    if (xres != pdPASS) error_init("UART-TX");
 
     // START SCHEDULER
     vTaskStartScheduler();

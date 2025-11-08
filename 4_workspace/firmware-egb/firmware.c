@@ -156,10 +156,20 @@ typedef struct dumpreq {
 //volatile uint8_t toggle2 = 0;
 //lut_t lut[101];
 
+void clear_settings(void);
+void log_settings(void);
+
 uint8_t uart_set_lux(const char *args)
 {
     settings_t settings = {0};
+    rtc_t time = {0};
+    eeprom_cmd_t ecmd;
+    uint8_t ack = 0;
     char buffer[UART_BUFFER_SIZE];
+
+    // Suspendo tareas
+    vTaskSuspend(tControl);
+    vTaskSuspend(tLuxo);
 
     // Copio args a buffer
     strncpy(buffer, args, UART_BUFFER_SIZE);
@@ -219,31 +229,54 @@ uint8_t uart_set_lux(const char *args)
 
         token = strtok(NULL, " ");
     }
+
+    // Leo la hora en el rtc
+    xSemaphoreGive(sRTC);
+    taskYIELD();
+    xQueueReceive(qRTC, &time, portMAX_DELAY);
+    settings.time = time;
+
+    // settings -> EEPROM
+    xQueueSend(qEwrite, &settings, portMAX_DELAY);
+    ecmd = ECTRL_WRITE_SETTINGS;
+    xQueueSend(qEcontrol, &ecmd, portMAX_DELAY);
+    taskYIELD();
+
+    // DELAY 1SEG
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    // Doy la orden a task_Control para que refresque los datos
+    xSemaphoreGive(sRefresh);
+    // Saco de la suspension a task_Control Y task del luxometro
+    vTaskResume(tControl);
+    vTaskResume(tLuxo);
+
     // FOR DEBUG
     // Confirmo que recibi los datos del nuevo setting
     printf("[OK] Lux = %5d - Max = %5d - Min: %5d - Curva: %1d\n",
          settings.setpoint, settings.user_max, settings.user_min, settings.curva);
 
     // Mando ACK de recepcion de datos
-    return 0;
+    return ack;
 }
 
 uint8_t uart_eclear(void)
 {
+    uint8_t ack = 0;
     // clear_settings();
     // FOR DEBUG
     printf("[OK] Comando de borrado recibido\n");
     // Mando ACK de recepcion de datos
-    return 0;
+    return ack;
 }
 
 uint8_t uart_set_rtc(const char *args)
 {
     rtc_t time = {0};
     // uint8_t d0, d1, m0, m1, y0, y1, wd, hh0, hh1, mm0, mm1, ss0, ss1;
-    uint8_t day, month, year, weekday, hour, minute, second;
-    //uint8_t d, m, y, wd, hh, mm, ss;
+    // uint8_t day, month, year, weekday, hour, minute, second;
+    uint8_t d, m, y, wd, hh, mm, ss;
     int parsed;
+    uint8_t ack = 0;
     /* STRING ESPERADA
     * "set rtc day/month/year weekday hour:min:seg"
     * 1) separar set y rtc (hardcodeado con puntero)
@@ -294,62 +327,74 @@ uint8_t uart_set_rtc(const char *args)
     } */
     // DE A 2 DIGITOS
     parsed = sscanf(buffer, "%2hhu/%2hhu/%2hhu %1hhu %2hhu:%2hhu:%2hhu",
-            &day, &month, &year, &weekday, &hour, &minute, &second);
-    
+                        &d, &m, &y, &wd, &hh, &mm, &ss);
     if(parsed == 7){
-        time.day = day;
-        time.month = month;
-        time.year = year;
-        time.weekday = weekday;
-        time.hour = hour;
-        time.min = minute;
-        time.sec = second;
-        // FOR TESTING
-        printf("[OK] RTC_T recibido: %2d/%2d/%2d %1d %2d:%2d:%2d\n",
+        time.day = d;
+        time.month = m;
+        time.year = y;
+        time.weekday = wd;
+        time.hour = hh;
+        time.min = mm;
+        time.sec = ss;
+
+        // ESCRIBO EN EL RTC EN BAREMETAL
+        // ------------------------------
+        taskENTER_CRITICAL();
+        rtc_load(time);
+        taskEXIT_CRITICAL();
+        // ------------------------------
+
+        // FOR DEBUG
+        printf("[OK] RTC_T recibido: %02d/%02d/%02d %1d %02d:%02d:%02d\n",
         time.day, time.month, time.year, time.weekday,
         time.hour, time.min, time.sec);
     }
 
-    // FOR TESTING
-    else printf("[RTC] Error de formato de fecha y hora\n");
+    // FOR DEBUG
+    else {
+        printf("[RTC] Error de formato de fecha y hora\n");
+        ack = 1;
+    } 
     // Mando ACK de recepcion de datos
-    return 0;
+    return ack;
 }
 
 void uart_get_lux(void)
 {
     char msg[UART_BUFFER_SIZE];
-    static uint16_t lux_actual = 1111;
-    static uint16_t max_actual = 2222;
-    static uint16_t min_actual = 999;
-    // Armo string (demo)
-    snprintf(msg, sizeof(msg),
-        "[NOW] Lux = %5d - AL max = %5d - AL min = %5d - Curva = 0\n", 
-        lux_actual, max_actual, min_actual);
-    // Encolo el mensaje a UART_TX
-    xQueueSend(q_uart_tx, msg, 0);
+    static uint16_t lux_actual;
     // FOR DEBUG
     printf("[OK] Comando de lectura de lux recibido\n");
+    /* LEER LUX
+    * Hay lectura del luxometro ?
+    * Como la cola es recibida tambien dentro de task_Control()
+    * Vamos a trabajar con Overwrite y Peek para que ambas no se pisen
+    */
+    if(xQueuePeek(qLUX, &lux_actual, 0)){
+        snprintf(msg, UART_BUFFER_SIZE-1, "[NOW] Lux = %5d\n", lux_actual);
+        // Encolo el mensaje a UART_TX
+        xQueueSend(q_uart_tx, msg, 0);
+    }
+    else printf("[LUX] Error de lectura de lux\n");
 }
 
 void uart_get_log(void)
 {
-    char msg[UART_BUFFER_SIZE];
-
     // FOR DEBUG
     printf("[OK] Comando de dump log recibido\n");
-    // log_settings();
+    log_settings();
 
+    /* char msg[UART_BUFFER_SIZE];
     // Armo string (DEMO)
     // "[OK] Lux = 1111 - Max = 2222 - Min = 999 - Curva: RAPIDA\n"
     for(uint8_t i = 0; i < 5; i++){
-        snprintf(msg, sizeof(msg), "[%03d] Lux = %5d - Max = %5d - Min = %5d - Curva: RAPIDA\n",
+        snprintf(msg, UART_BUFFER_SIZE-1, "[%03d] Lux = %5d - Max = %5d - Min = %5d - Curva: RAPIDA\n",
             i, i+1000, i+1200, i+800);
         // Encolo strings a UART_TX
         xQueueSend(q_uart_tx, msg, 0);
         // Delay para refresh de buffers en recepcion
         vTaskDelay(pdMS_TO_TICKS(100));
-    }
+    } */
 }
 
 void uart_cmd_set(const char *args)
@@ -388,12 +433,12 @@ void uart_cmd_set(const char *args)
     else printf("[UART] Opcion desconocida: %s\n", opc);
     // ENVIO ACK SI COMANDO OK
     if(ack == 0){
-        snprintf(msg, sizeof(msg), "[ACK] Comando set %s OK\n", opc);
+        snprintf(msg, UART_BUFFER_SIZE-1, "[ACK] Comando set %s OK\n", opc);
         // Encolo string a UART_TX
         xQueueSend(q_uart_tx, msg, 0);
     }
     else {
-        snprintf(msg, sizeof(msg), "[NACK] Comando set %s incorrecto\n", opc);
+        snprintf(msg, UART_BUFFER_SIZE-1, "[NACK] Comando set %s incorrecto\n", opc);
         // Encolo string a UART_TX
         xQueueSend(q_uart_tx, msg, 0);
     }
@@ -435,7 +480,7 @@ void ISR_uart_rx() {
 
     while (uart_is_readable(UART_ID)) {
         char c = uart_getc(UART_ID);
-
+        // if (c == '\r') continue;
         if (c == '\r' || c == '\n') {
             if (uart_rx_index > 0) {
                 uart_rx_buffer[uart_rx_index] = '\0';
@@ -990,6 +1035,8 @@ void log_settings(void)
     // Estructuras para manejo de dump
     eepromDumpRequest_t dump;
     settings_t settings;
+    // LOG UART
+    char msg[UART_BUFFER_SIZE];
 
     ///// DUMP DE SETTINGS POR CONSOLA /////
     ecmd = ECTRL_DUMP;
@@ -1002,11 +1049,18 @@ void log_settings(void)
         // Recibo de cola response con un timeout
         if(xQueueReceive(dump.responseQueue, &settings, pdMS_TO_TICKS(100)) == pdPASS){
             // Mientras pueda recibir de la cola, imprimo el registro
-            printf("%d: (%02d/%02d %02d:%02d:%02d) Lux: %d, Max: %d, Min: %d, Curva: %d\n",
+            // Armo string
+            snprintf(msg, UART_BUFFER_SIZE-1, "[%3d] (%02d/%02d %02d:%02d:%02d) Lux = %5d - Max = %5d - Min = %d - Curva = %1d\n",
                 settings.index, settings.time.day, settings.time.month,
                 settings.time.hour, settings.time.min,
                 settings.time.sec, settings.setpoint, settings.user_max,
                 settings.user_min, settings.curva);
+            // Encolo strings a UART_TX
+            // uart_tx_send(msg);
+            xQueueSend(q_uart_tx, msg, 0);
+
+            // IMPRIMO POR CONSOLA (DEBUG)
+            printf("%s", msg);
             fflush(stdout);
             vTaskDelay(pdMS_TO_TICKS(100));
         }
