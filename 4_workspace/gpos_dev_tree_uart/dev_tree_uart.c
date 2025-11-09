@@ -5,6 +5,7 @@
 #include <linux/device.h>
 #include <linux/serdev.h>
 #include <linux/fs.h>
+#include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/uaccess.h>
 
@@ -17,11 +18,11 @@
 // Cantidad de devices para reservar
 #define CDEV_COUNT	1
 // Cantidad maxima de bytes para el buffer de usuario
-#define SHARED_BUFF_SIZE	64
+#define SHARED_BUFF_SIZE	128
 
 // IDs de serial devices
 static struct of_device_id serdev_ids[] = {
-	{ .compatible = "brightlight,td3_uart", },
+	{ .compatible = "brightlight,td3_uart" },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, serdev_ids);
@@ -32,7 +33,7 @@ static struct serdev_device *g_serdev = NULL;
 /**
  * @brief Llamada cuando se recibe mensaje por UART
 */
-static int td3_uart_recv(struct serdev_device *serdev, const unsigned char *buffer, size_t size) {
+static size_t td3_uart_recv(struct serdev_device *serdev, const unsigned char *buffer, size_t size) {
 	// Puntero a cadena
 	static char str[SHARED_BUFF_SIZE] = {0};
 	static int i = 0;
