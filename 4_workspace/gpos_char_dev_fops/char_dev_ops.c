@@ -2,6 +2,9 @@
 #include <linux/init.h>
 #include <linux/cdev.h>
 #include <linux/fs.h>
+#include <linux/uaccess.h>
+#include <linux/slab.h>
+#include <linux/kernel.h>
 
 // Etiqueta para el autor del modulo
 #define AUTHOR	"utn-fra-td3"
@@ -43,11 +46,12 @@ static ssize_t chr_dev_read(struct file *f, char __user *buff, size_t size, loff
 /**
  * @brief Callback llamado cuando se escribe el char device
 */
-static ssize_t chr_dev_write(struct file *f, const char __user *buff, size_t size, loff_t *off) {
+static ssize_t chr_dev_write(struct file *f, const char __user *buff, size_t len, loff_t *off)
+{
 	// Variables auxiliares
 	int to_copy, not_copied, copied;
 	// Reviso si lo que se escribio excede al buffer
-	to_copy = min(size, sizeof(shared_buffer));
+	to_copy = min(len, sizeof(shared_buffer));
 	// Copio lo escrito al buffer y guardo la cantidad de bytes que no se copiaron
 	not_copied = copy_from_user(shared_buffer, buff, to_copy);
 	// Calculo cuantos bytes se copiaron
@@ -65,11 +69,55 @@ static ssize_t chr_dev_write(struct file *f, const char __user *buff, size_t siz
 	return copied;
 }
 
+static ssize_t chr_dev_write_file(struct file *file, const char __user *buf, size_t len, loff_t *off)
+{
+    struct file *rx_file;
+    char *kbuf;
+    loff_t pos;
+    ssize_t ret;
+
+    // Reservo memoria para copiar el buffer del usuario
+    kbuf = kmalloc(len + 1, GFP_KERNEL);
+    if (!kbuf)
+        return -ENOMEM;
+
+    if (copy_from_user(kbuf, buf, len)) {
+        kfree(kbuf);
+        return -EFAULT;
+    }
+
+    kbuf[len] = '\0';
+
+    // Abrimos el archivo rx.txt en modo append
+    rx_file = filp_open("/home/nacho/egb/rx.txt", O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (IS_ERR(rx_file)) {
+        pr_err("td3_uart: No se pudo abrir /home/nacho/egb/rx.txt (error %ld)\n", PTR_ERR(rx_file));
+        kfree(kbuf);
+        return PTR_ERR(rx_file);
+    }
+
+    // Posición al final del archivo
+    pos = rx_file->f_pos;
+
+    // Escribimos directamente con kernel_write (sin cambiar el segmento)
+    ret = kernel_write(rx_file, kbuf, len, &pos);
+    if (ret < 0)
+        pr_err("td3_uart: Error al escribir en rx.txt (%zd)\n", ret);
+    else
+        pr_info("td3_uart: %zu bytes guardados en rx.txt\n", len);
+
+    // Cerramos archivo y liberamos memoria
+    filp_close(rx_file, NULL);
+    kfree(kbuf);
+
+    return len;
+}
+
 // Operaciones de archivos
 static struct file_operations chrdev_ops = {
 	.owner = THIS_MODULE,
 	.read = chr_dev_read,
-	.write = chr_dev_write
+	.write = chr_dev_write_file
 };
 
 /**

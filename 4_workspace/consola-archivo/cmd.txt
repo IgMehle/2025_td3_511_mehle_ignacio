@@ -1,0 +1,11 @@
+set lux -v 1100 -h 1300 -l 900 -a 0
+get lux
+get log
+set rtc "9/11/25 7 20:58:00"
+get lux
+set rtc
+set rtc 09/11/25 7 21:13:00
+get lux
+get log
+set clear
+set rtc 9/11/25 7 21:19:00
