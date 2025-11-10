@@ -1,0 +1,36 @@
+MULTITAREA EN SO
+
+Es importante proteger la memoria y controlar el acceso al hardware.
+Para eso se separan el kernel space y el user space.
+Ademas, se necesitaba 
+
+Para dos procesos A y B tengo sus LDT A y B. El proceso A puede entrar a un descriptor de la LDT A, pero no puede buscar uno en la LDT B, porque no la ve.
+Un proceso creado en modo user, necesita un driver para acceder a hardware, por ejemplo la memoria. Por si mismo solo puede acceder a descriptores de DPL 3.
+En modo kernel podes acceder a todos los niveles de prioridad.
+Para que un proceso user pueda acceder a un descriptor de tipo kernel, necesita una Gate (descriptor de sistema).
+
+PAGINACION
+Divide la memoria en bloques de 4kb en lugar de segmentos de tamano variable.
+La memoria se organiza en paginas, tablas de paginas, y directorios de tablas de paginas.
+DIRECCION LINEAL = DIRECTORIO + TABLA + PAGINA
+El procesador lleva paginas de disco a ram.
+
+CAMBIO DE CONTEXTO EN LINUX
+No se usa el TSS sino que LInux utiliza su propia estructura, Process Control BLock (PCB), a traves de la estructura "task struct".
+Si se usa el TSS para pasar de user a kernel, INT con cambio de nivel de provilegio, o cambios al stack del kernel.
+
+PROGRAMAS EN LINUX
+Un programa, en términos generales, es un conjunto de instrucciones escritas en un
+lenguaje de programación que puede ser ejecutado por una computadora para realizar
+una tarea específica. Este conjunto de instrucciones está almacenado en un archivo y
+define una secuencia de operaciones a realizar.
+Un proceso es una instancia de un programa en ejecucion.
+Un proceso puede tener muchos hilos.
+
+El cambio de contexto entre hilos no involucra la paginacion.
+El kernel no ve los hilos de un proceso, solo ve 1 solo proceso.
+Si un hilo se cuelga, el kernel no distingue que se colgo uno solo, sino que ve todo el proceso colgado.
+
+CFS: Completely Fair Scheduler
+Cada proceso tiene un nivel de prioridad (nice value)
+

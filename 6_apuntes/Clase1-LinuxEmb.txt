@@ -1,9 +1,5 @@
 KERNEL DE LINUX
 
-Caso de estudio: que pasa si quiero implementar una uart por software en la Pi?
-No puedo porque del lado de usuario no puedo interactuar dierectamente con los GPIO.
-Hay que trabajar del lado del kernel.
-
 Pi4: Raspberry Pi OS Lite 64bit
 PC: Distro ualquiera o maquina virtual - NOTAR QUE VERSION DE KERNEL TIENE
 
@@ -101,5 +97,23 @@ Creo un nuevo hilo (thread2) y SI NO LO PUEDO CREAR libero los recursos del ante
 
 $ dmesg -wT # Corre continuamente los mensajes de kernel (con timestamp formateado)
 
+-- Para visualizar Markdown en Code: Ctlr+K, V
+
+
+///// TP5 /////
+
+# Para copiar a la Pi
+$ scp -r tp5 nacho@pi4mehle.local:~
+# Entrar a ~/tp5
+$ cd /tp5
+# Compilar :)
+$ make
+# Cargar el modulo
+$ cd /build
+$ sudo insmod utn-fra-td3-tp5.ko
+# Ver mensajes del kernel
+$ dmesg -wHT | grep IgMehle
+# El IgMehle esta puesto como $(AUTHOR) en el codigo fuente
+# Si corremos lsmod vemos "utn_fra_td3_tp5" que es el nombre del modulo
 
 

@@ -1,0 +1,454 @@
+DEVICE TREES - PERIFERICOS
+
+https://linux-kernel-labs.github.io/refs/heads/master/labs/device_drivers.html
+
+$ ls /dev/ # Dispositivos fisicos de hardware
+-- En linux los dispositivos seriales siempre arrancan con tty.
+
+$ ls /proc/ #Procesos
+
+FILE OPERATIONS: En Linux todo es un archivo
+https://tldp.org/LDP/lkmpg/2.4/html/c577.htm
+
+The file_operations structure is defined in linux/fs.h, and holds pointers to functions defined by the driver that perform various operations on the device. Each field of the structure corresponds to the address of some function defined by the driver to handle a requested operation.
+
+For example, every character driver needs to define a function that reads from the device. The file_operations structure holds the address of the module's function that performs that operation.
+
+file_operations: https://elixir.bootlin.com/linux/v6.16/source/include/linux/fs.h#L2151
+
+Callback - Funcion que es llamada cuando ocurre un evento
+Todos los archivos tienen funciones de archivo como OPEN, READ, WRITE, APPEND, CLOSE.
+Desde el kernel, para manipular un periferico, se hace a traves de los PROC FILES y CHAR DEVICES.
+Creamos un archivo, registramos funciones asociadas a un evento de ese archivo, y con esas funciones trabajamos.
+
+//------------------------------------------------------------------------------------------------------------
+
+PROC FILES
+
+-- Como creamos un procfs?
+
+#include <linux/module.h>
+#include <linux/init.h>
+#include <linux/proc_fs.h>
+
+// Etiqueta para autor del modulo
+#define AUTHOR			"utn-fra-td3"
+// Etiqueta para el nombre del directorio
+#define FOLDER_NAME		AUTHOR
+// Etiqueta para el nombde del archivo
+#define FILE_NAME		"test"
+
+// Puntero a directorio
+static struct proc_dir_entry *folder;
+// Puntero a archivo
+static struct proc_dir_entry *file;
+
+// Operaciones para el archivo
+static struct proc_ops fops = {
+	.proc_read = _read,		// Callback llamado cuando se lee el archivo
+	.proc_write = _write	// Callback llamado cuando se escribe el archivo
+};
+
+///// INIT /////
+
+static int __init procfs_init(void) {
+	// Mensaje para el modulo
+	printk("%s: Insertando el modulo de kernel\n", AUTHOR);
+	// Intento crear el directorio
+	if(NULL == (folder = proc_mkdir(FOLDER_NAME, NULL))) {
+		printk("%s: Error al crear la carpeta /proc/%s\n", AUTHOR, FOLDER_NAME);
+		return -ENOMEM;
+	}
+	// Intento crear el archivo y registrar sus operaciones
+	if(NULL == (file = proc_create(FILE_NAME, 0666, folder, &fops))) {
+		printk("%s: Error al crear el archivo /proc/%s/%s\n", AUTHOR, FOLDER_NAME, FILE_NAME);
+		// Elimino el directorio
+		proc_remove(folder);
+		return -1;
+	}
+	return 0;
+}
+
+proc_mkdir() devuelve un puntero al directorio, y se le pasa: el nombre del directorio, y la raiz de donde crearlo (NULL lo crea en /proc/)
+
+proc_create() toma: Nombre del archivo
+                    Permisos de archivo
+                    Directorio del proceso
+                    fops - estructura a los callbacks  
+devuelve:           Puntero al archivo
+
+Como son los permisos de archivo?
+$ ls -l # Listo archivos en directorio con detalles
+
+<tipo de archivo> <permisos_user> <permisos_group> <permisos_other> <links del archivo> <user> <group>
+
+Tengo ciertos permisos de usuario, y ciertos permisos de grupo de usuarios. Other es cualquiera que no sea el usuario o grupo (por ejemplo un usuario nuevo fuera del grupo).
+Suele pasar al programar micros por puerto serial, tira Permission denied, porque el usuario no tiene permisos para usar el serial. Se agrega entonces el usuario al grupo que puede manejar puertos serie.
+Hay 3 permisos: LECTURA (r), ESCRITURA (w) Y EJECUCION (x). Si el permiso no esta, se ve con un guion (-).
+
+Linux NUNCA crea archivos con permiso de ejecucion, por motivos de seguridad
+$ chmod # Permite modificar permisos de archivo
+
+Que es el 0666? Los permisos tienen pesos en binario. x tiene peso 1 en binario, w tiene peso 2 y r tiene peso 3. 0666 significa que se crea el archivo con permisos de rw para user, group y other (rw-rw-rw-)
+
+- Copiamos gpos_procfs a ~ de la pi
+- Compilamos y cargamos el modulo al kernel
+
+$ ls -l /proc/ | grep utn
+El dueno del directorio es root, porque lo creo el kernel
+
+$ ls -l /proc/utn-fra-td3
+-rw-rw-rw- 1 root root 0 <fecha> test
+
+$ man ls # Abre el manual del comando ls
+
+Hay una interaccion entre el user y el kernel... Los callbacks _read() y _write() van a ser ese puente ((las funciones con _ delante suelen ser privadas, no toquessss))
+
+// CALLBACK READ
+
+static ssize_t _read(struct file *f, char __user *buff, size_t size, loff_t *off) {
+    // Variables auxiliares
+    int to_copy, not_copied, copied;
+    // Si el offset es mayor que el tamaño del buffer, no hay mas datos para leer
+    if (*off >= sizeof(shared_buffer)) { return 0; }
+    // Reviso cuanto se puede leer
+    to_copy = min(size, sizeof(shared_buffer) - *off);
+    // Copio lo que hay en el dispositivo de caracteres y lo copio al usuario
+    not_copied = copy_to_user(buff, shared_buffer + *off, to_copy);
+    // Actualizo el offset
+    *off += to_copy;
+    // Calculo cuántos bytes se copiaron y devuelvo
+    copied = to_copy - not_copied;
+    return copied;
+}
+
+struct file *f es el puntero a archivo
+char __user *buff es el buffer de datos que va a terminar viendo el usuario
+size_t size 
+
+// CALLBACK WRITE
+
+static ssize_t _write(struct file *f, const char __user *buff, size_t size, loff_t *off) {
+	// Variables auxiliares
+	int to_copy, not_copied, copied;
+	// Reviso si lo que se escribio excede al buffer
+	to_copy = min(size, sizeof(shared_buffer));
+	// Copio lo escrito al buffer y guardo la cantidad de bytes que no se copiaron
+	not_copied = copy_from_user(shared_buffer, buff, to_copy);
+	// Calculo cuantos bytes se copiaron
+	copied = to_copy - not_copied;
+	// Limpio los espacios despues del enter
+	for(int i = 0; i < copied; i++) {
+		if(shared_buffer[i] == '\n') {
+			shared_buffer[i] = 0;
+			break;
+		}
+	}
+	// Muestro lo que se escribio en el kernel
+	printk(KERN_INFO "%s: Se escribio '%s' en el proc file\n", AUTHOR, shared_buffer);
+	// Devuelvo la cantidad de bytes copiados
+	return copied;
+}
+
+// Programa de test del proc file
+
+$ echo "Hola esto es un quilombo\n" >> /proc/utn-fra-td3/test # echo escribe strings
+
+Muestra el mensaje en el kernel
+Verificamos leyendo con cat
+
+$ cat /proc/utn-fra-td3/test # cat lee strings
+
+Para compilar el main.c compilamos con 
+$ gcc -o main main.c # -o main fuerza a que el archivo objeto tome el nombre main
+Ejecutamos con 
+$ ./main
+
+Para correr el de python
+$ python3 main.py
+
+Cualquier lenguaje de alto nivel puede leer/escribir un archivo, y es la idea para "remotizar" la EGA
+
+//------------------------------------------------------------------------------------------------------
+
+//----------------- CHAR DEVICES ---------------------------------------------//
+
+$ ls -l /dev/
+
+Los devices tienen un major number y minor number. Por ejemplo los bancos de ram tienen un major number de 1.
+Se tienen que reservar estos numbers al registrar el char device.
+Al listar con detalles aparecen los <major>, <minor>.
+Sobre el minor number puedo tener control, pero el major number lo asigna el kernel.
+
+// CALLBACK PARA REGISTRAR EL CHAR DEVICE (gpos_char_dev)
+
+static int __init chrdev_init(void) {
+
+	// Intento ver de reservar el char device
+    // Crea un archivo llamado "td3-utn-fra" en /dev
+	if(alloc_chrdev_region(&chrdev_number, CHRDEV_MINOR, CHRDEV_COUNT, AUTHOR) < 0) {
+		printk(KERN_ERR "%s: No se pudo crear el char device\n", AUTHOR);
+		return -1;
+	}
+	
+    // Mensaje informativo para ver el major y minor number
+	printk(KERN_INFO
+		"%s: Reservada una region para un char device con major %d y minor %d\n",
+		AUTHOR,
+		MAJOR(chrdev_number),
+		MINOR(chrdev_number)
+	);
+
+	// Inicializo el char device con sus operaciones
+	cdev_init(&chrdev, &chrdev_ops);
+	// Asocio el char device con la region reservada
+	if(cdev_add(&chrdev, chrdev_number, CHRDEV_COUNT) < 0) {
+		unregister_chrdev_region(chrdev_number, CHRDEV_COUNT);
+		printk(KERN_ERR "%s: No se pudo crear el char device\n", AUTHOR);
+		return -1;
+	}
+
+	// Creo estructura de clase
+	chrdev_class = class_create(AUTHOR);
+	// Verifico si fue posible
+	if(IS_ERR(chrdev_class)) {
+		unregister_chrdev_region(chrdev_number, CHRDEV_COUNT);
+		printk(KERN_ERR "%s: No se pudo crear la clase del char device\n", AUTHOR);
+		return -1;
+	}
+
+	// Creo el archivo del char device
+	if(IS_ERR(device_create(chrdev_class, NULL, chrdev_number, NULL, AUTHOR))) {
+		class_destroy(chrdev_class);
+		unregister_chrdev_region(chrdev_number, CHRDEV_COUNT);
+		printk(KERN_ERR "%s: No se pudo crear el char device\n", AUTHOR);
+		return -1;
+	}
+
+	printk(KERN_INFO "%s: Fue creado el char device\n", AUTHOR);
+	return 0;
+}
+
+alloc_chrdev_region() inicializa el char device en /dev/
+El major number lo define el kernel, verificamos con:
+
+$ ls -l /dev | grep utn
+
+### (min 16)
+Yo tengo que registrar una funcion de operacion para ESE archivo para CADA operacion de archivo, usando la estructura file_operations
+
+Para registrar el char device:
+cdev_init() - Intento crear el char device y asignarle las operaciones de archivos que definimos
+
+cdev_add() - 
+
+class_create() - Creamos el device con esa clase
+
+device_create() - 
+
+Para registrar el modulo de kernel - Compilamos e insertamos con insmod.
+Igual que en proc files, el kernel crea el archivo de chardev.
+
+$ ls -l <chardev>
+<tipo de archivo> <permisos_user> <permisos_group> <permisos_other> <links del archivo> <user> <group> <major> <minor> <fecha creacion> <modulo>
+crw------- 1 root root MN, mn <fecha creacion> <modulo>
+
+Los char devices nacen con permisos restringidos. Para leer/escribir hay que actualizarle los permisos:
+$ sudo chmod 666 /dev/utn-fra-td3
+
+**
+ * @brief Se llama cuando el modulo se quita del kernel
+ */
+static void __exit chrdev_exit(void) {
+	// Libero la zona del char device
+	device_destroy(chrdev_class, chrdev_number);
+	class_destroy(chrdev_class);
+	unregister_chrdev_region(chrdev_number, CHRDEV_COUNT);
+	cdev_del(&chrdev);
+}
+
+//-------------------------------------------------------------------------------------//
+
+CHAR DEVICE CON FILE OPERATIONS (char_dev_fops)
+- Lo que escribo desde el usuario lo guarda en un buffer (shared_buffer)
+- Cuando pido leer devuelve lo escrito en el buffer
+
+// Operaciones de archivos
+static struct file_operations chrdev_ops = {
+	.owner = THIS_MODULE,
+	.read = chr_dev_read,
+	.write = chr_dev_write
+};
+
+static ssize_t chr_dev_write(struct file *f, const char __user *buff, size_t size, loff_t *off)
+    f - Toma el puntero a archivo
+    __user *buff - Buffer compartido desde y hacia el espacio de usuario.
+    size - Tamanio de lo que se quiere escribir
+    *off - Offset
+
+Todo lo definido en esta funcion escribe el string que pasa el usuario a shared_buffer
+
+copy_from_user() - Pasa lo que el usuario quiere escribir (user) al buffer del modulo del kernel (shared_buffer), to_copy cantidad de bytes
+
+EJEMPLO:
+$ echo "set angulo 75" >> /dev/my_uart
+$ cat /dev/my_uart
+
+En la funcion chr_dev_read() voy a pasarle el string al shared_buffer, y el shared_buffer lo paso a ser_dev_uart(), que lo manda a la UART
+
+CONVIENE TENER SOLO 2 COMANDOS BASE, SET Y GET, Y USAR DISTINTOS ARGUMENTOS
+
+static ssize_t chr_dev_read(struct file *f, char __user *buff, size_t size, loff_t *off)
+
+copy_to_user() - Pasa los datos del shared_buffer al buff de usuario
+
+//-------------------------------------------------------------------------------------//
+
+CHAR DEVICE DE UART
+
+La uart1 tiene su device tree de linux. Con nuestro .dts creamos un overlay (una capa sobre la uart1) de nombre td3_uart_driver.
+Tiene callbacks de probe (cuando se conecta al puerto serie) y remove.
+Sobre ello tenemos una capa de server_device_ops que tiene de callback receive_buff.
+Sobre todo tenemos las file_operations del char_device, write y read.
+
+NOTA:
+static int td3_uart_recv(struct serdev_device *serdev, const unsigned char *buffer, size_t size) {}
+tiene que ser
+static size_t td3_uart_recv(struct serdev_device *serdev, const unsigned char *buffer, size_t size) {}
+
+DEVICE TREE OVERLAY
+Como sabe linux que device tree debe cargar?
+Todo procesador que corra linux tiene su archivo .dts, que describe todos los perifericos que tiene, porque cada uno va a llevar su device tree
+Para poder usar el uart desde el kernel, vamos a tener que describir desde el kernel de linux un overlay que la habilite
+
+
+DEVICE TREE UART (gpos_dev_tree_uart)
+
+El device tree overlay es el archivo .dts
+compatible - 'fabricante,dispositivo'
+
+// IDs de serial devices
+static struct of_device_id serdev_ids[] = {
+	{ .compatible = "brightlight,td3_uart", },
+	{ }
+};
+MODULE_DEVICE_TABLE(of, serdev_ids);
+
+// Estructura de implementacion del driver
+static struct serdev_device_driver td3_uart_driver = {
+	.probe = td3_uart_probe,
+	.remove = td3_uart_remove,
+	.driver = {
+		.name = "td3_uart_driver",
+		.of_match_table = serdev_ids,
+	},
+};
+
+td3_uart_probe() es una funcion que se dispara cuando se registra un periferico compatible
+
+
+Intento registar un driver de uart, se fija en la lista de compatibles, y si hay uno en la lista, se dispara la funcion de probe()
+
+/**
+ * @brief Se llama cuando se conecta un dispositivo UART que matchea con el
+ * descrito en la tabla de IDs
+*/
+static int td3_uart_probe(struct serdev_device *serdev) {
+	printk(KERN_INFO "%s: Se conecto un dispositivo UART\n", AUTHOR);
+	// Registro las operaciones
+	serdev_device_set_client_ops(serdev, &td3_uart_ops);
+	// Intento abrir el puerto UART
+	if(serdev_device_open(serdev)) {
+		printk(KERN_ERR "%s: Error abriendo el puerto UART\n", AUTHOR);
+		return -1;
+	}
+
+	// Configuro UART
+	serdev_device_set_baudrate(serdev, 115200);
+	serdev_device_set_flow_control(serdev, false);
+	serdev_device_set_parity(serdev, SERDEV_PARITY_NONE);
+	// Guardo el puntero
+	g_serdev = serdev;
+	if(g_serdev == NULL) {
+		printk(KERN_ERR "%s: Algo salio mal con el puerto UART\n", AUTHOR);
+		return -1;
+	}
+	return 0;
+}
+
+serdev_device_set_client_ops() - registro operaciones (callbacks, equivalente a interrupciones)
+Registramos el callback td3_uart_recv() - callback de recepcion
+- Lo que entra por puerto serie lo manda al buffer
+
+/**
+ * @brief Llamada cuando se recibe mensaje por UART
+*/
+static int td3_uart_recv(struct serdev_device *serdev, const unsigned char *buffer, size_t size) {
+	// Puntero a cadena
+	static char str[SHARED_BUFF_SIZE] = {0};
+	static int i = 0;
+	// Veo si es un caracter valido
+	if(*buffer) {
+		// Copio el caracter
+		str[i++] = *buffer;
+	}
+	// Verifico si me excedi
+	if(i == SHARED_BUFF_SIZE || str[i-1] == '\0') {
+		// Imprimo el mensaje recibido
+		printk(KERN_INFO "%s: Se recibieron %d bytes por UART. El mensaje fue '%s'\n", AUTHOR, i-1, str);
+		// Reinicio las variables
+		memset(str, 0, i);
+		i = 0;
+	}
+	return size;
+}
+
+cdev_echo_write() - Cuando se escribe el archivo, lo que escribimos lo mando por puerto serie
+
+/**
+ * @brief Se llama cuando se escribe el archivo
+*/
+static ssize_t cdev_echo_write(struct file *f, const char __user *buff, size_t size, loff_t *off) {
+	// Variables para cantidad de bytes escritos
+	int not_copied, to_copy = (size > SHARED_BUFF_SIZE)? SHARED_BUFF_SIZE : size;
+	// Copio del user para escribir
+	not_copied = copy_from_user(shared_buffer, buff, to_copy);
+	// Mensaje testigo para el kernel
+	printk("%s: Escrito sobre /dev/%s - %s\n", AUTHOR, CDEV_NAME, shared_buffer);
+	// Mando el mensaje por UART
+	if(g_serdev != NULL) {
+		serdev_device_write_buf(g_serdev, shared_buffer, sizeof(shared_buffer));
+		// Devuelvo la cantidad de bytes que se copiaron
+		return to_copy - not_copied;
+	}
+	return 0;
+}
+
+/**
+ * @brief Se llama cuando se lee el archivo
+*/
+static ssize_t cdev_echo_read(struct file *f, char __user *buff, size_t size, loff_t *off) {
+	// Variables para cantidad de bytes escritos
+	int not_copied, to_copy = (size > SHARED_BUFF_SIZE)? SHARED_BUFF_SIZE : size;
+	// Veo si se puede copiar
+	if(*off >= to_copy) { return 0; }
+	// Copio al user
+	not_copied = copy_to_user(shared_buffer, buff, to_copy);
+	// Mensaje testigo para el kernel
+	printk("%s: Leido sobre /dev/%s - %s\n", AUTHOR, CDEV_NAME, shared_buffer);
+	*off = to_copy - not_copied;
+	// Devuelvo lo que falta
+	return to_copy - not_copied;
+}
+
+- La diferencia entre td3_uart_recv() y cdev_echo_read() es que una salta cuando tengo recepcion de datos en la uart, y otra cuando se busca leer el archivo del device tree
+
+// CAMBIO EN LA ESTRUCTURA
+/boot/config.txt -> /boot/firmware/config.txt
+
+Se puede cargar un dtoverlay en booteo agregando el nombre del device tree en el config.txt
+
+Sino, se hace en runtime con
+$ dtoverlay <nombre del device>
+
+
