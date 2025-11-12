@@ -114,8 +114,8 @@ typedef struct settings {
 typedef struct menu {
     const char* texto;
     uint16_t valor;
-    uint16_t min;
     uint16_t max;
+    uint16_t min;
 } menu_t;
 
 typedef enum ecmd {
@@ -237,7 +237,7 @@ uint8_t uart_set_lux(const char *args)
     settings.time = time;
 
     // Actualizo queue settings
-    //xQueueOverwrite(q_settings, &settings);
+    xQueueOverwrite(q_settings, &settings);
 
     // settings -> EEPROM
     xQueueSend(q_ewrite, &settings, portMAX_DELAY);
@@ -1085,7 +1085,7 @@ void clear_settings(void)
     taskYIELD();
     // Esperar confirmación
     if(xSemaphoreTake(s_eeprom_empty, portMAX_DELAY) == pdPASS){
-        printf("Borrado completado.\n");
+        printf("Borrado completado.\r\n");
         fflush(stdout);
         vTaskDelay(pdMS_TO_TICKS(1));
     }
@@ -1269,7 +1269,7 @@ void task_Config(void *params)
             lcd.line = 0;
             lcd.clear = 1;
             xQueueSend(q_lcd, &lcd, portMAX_DELAY);
-            taskYIELD();
+            // taskYIELD();
             sprintf(lcd.text, "CONFIGURACION");
             lcd.line = 1;
             lcd.clear = 0;
@@ -1284,7 +1284,7 @@ void task_Config(void *params)
             settings.curva = (uint8_t) menu[3].valor;
             
             // Actualizo queue settings
-            // xQueueOverwrite(q_settings, &settings);
+            xQueueOverwrite(q_settings, &settings);
 
             // settings -> EEPROM
             xQueueSend(q_ewrite, &settings, portMAX_DELAY);
@@ -1317,10 +1317,9 @@ void task_BH1750(void *pvParams)
             bh1750_init(ONESHOT_LORES);
             xSemaphoreGive(m_i2c);
             // Paso a la cola
-            // xQueueOverwrite(q_lux, &lux);
-            xQueueSend(q_lux, &lux, portMAX_DELAY);
+            xQueueOverwrite(q_lux, &lux);
             // Give semaforo de muestra de lux
-            // xSemaphoreGive(s_lux);
+            xSemaphoreGive(s_lux);
         }
         // Corre cada LUX_TIME
         vTaskDelayUntil(&last_tick, pdMS_TO_TICKS(LUX_TIME));
@@ -1379,13 +1378,7 @@ void task_Control(void *pvParams)
         // Actualizar seteos y calibracion ? (NO BLOQUEANTE)
         if(xSemaphoreTake(s_refresh, 0) == pdPASS){
             // ACTUALIZO SETTINGS
-
-            // Levanto valores de la eeprom
-            ecmd = ECTRL_READ_SETTINGS;
-            xQueueSend(q_ecmd, &ecmd, portMAX_DELAY);
-            taskYIELD();
-            xQueueReceive(q_eread, &settings, portMAX_DELAY);
-            // xQueuePeek(q_settings, &settings, portMAX_DELAY);
+            xQueuePeek(q_settings, &settings, portMAX_DELAY);
 
             // Calculo de constantes integral y derivativa
             // Sin autotune() se adoptan constantes empiricas
@@ -1408,9 +1401,8 @@ void task_Control(void *pvParams)
         }
         // Hay lectura del luxometro ?
         // No lo hacemos bloqueante para que pueda imprimir dentro del tiempo de medicion
-        // if(xSemaphoreTake(s_lux, portMAX_DELAY) == pdPASS){
-            // xQueuePeek(q_lux, &lux, 0);
-        if(xQueueReceive(q_lux, &lux, 0) == pdPASS){
+        if(xSemaphoreTake(s_lux, portMAX_DELAY) == pdPASS){
+            xQueuePeek(q_lux, &lux, 0);
             //////////////////////////////////////////
             ///// CONTROL PID ////////////////////////
             // ap = kp*error;
@@ -1479,8 +1471,8 @@ void task_Control(void *pvParams)
             last_tick = tick;
             tick = xTaskGetTickCount();
             dif_ticks = tick - last_tick;
-            printf("\rLUX = %5d\teR = %.2f\tAP = %.3f\tAI = %.3f\tAD = %.3f\tduty = %2.2f\t%4dms", 
-                lux, 100*eR, ap, ai, ad, duty_f, dif_ticks);
+            //printf("\rLUX = %5d\teR = %.2f\tAP = %.3f\tAI = %.3f\tAD = %.3f\tduty = %2.2f\t%4dms", 
+            //    lux, 100*eR, ap, ai, ad, duty_f, dif_ticks);
             // printf("\nd_Ticks: %5dms - LUX= %d - duty = %.2f", dif_ticks, lux, duty_f);
 
             // Acumulo lux para mostrar en lcd
@@ -1657,8 +1649,8 @@ int main()
     q_uart_tx = xQueueCreate(8, UART_BUFFER_SIZE);
 
     // Creo semaforos binarios y los libero
-    //vSemaphoreCreateBinary(s_lux);
-    //xSemaphoreGive(s_lux);
+    vSemaphoreCreateBinary(s_lux);
+    xSemaphoreGive(s_lux);
     vSemaphoreCreateBinary(s_rtc);
     xSemaphoreGive(s_rtc);
     vSemaphoreCreateBinary(s_refresh);
@@ -1687,11 +1679,11 @@ int main()
     // Creo queues de datos de eeprom
     q_ewrite = xQueueCreate(1, sizeof(settings_t));
     //q_ewrite = xQueueCreate(1, 16U);
-    q_ewritecalib = xQueueCreate(1, sizeof(calibration_t));
-    // q_ewritecalib = xQueueCreate(1, 16U);
-    q_eread = xQueueCreate(1, sizeof(settings_t));
-    q_ereadcalib = xQueueCreate(1, sizeof(calibration_t));
-    // q_ereadcalib = xQueueCreate(1, 16U);
+    //q_ewritecalib = xQueueCreate(1, sizeof(calibration_t));
+    q_ewritecalib = xQueueCreate(1, 16U);
+    q_eread = xQueueCreate(1, 16U);
+    //q_ereadcalib = xQueueCreate(1, sizeof(calibration_t));
+    q_ereadcalib = xQueueCreate(1, 16U);
     q_dump = xQueueCreate(1, sizeof(eepromDumpRequest_t));
 
     // Creo tareas
@@ -1701,7 +1693,7 @@ int main()
     xTaskCreate(task_BH1750, "BH1750", 128, NULL, 4, &th_Lux);
     xTaskCreate(task_LCD, "LCD", 128, NULL, 4, NULL);
     xTaskCreate(task_RTC, "RTC", 128, NULL, 4, NULL);
-    xTaskCreate(task_EEPROM, "EEPROM", 384, NULL, 4, NULL);
+    xTaskCreate(task_EEPROM, "EEPROM", 512, NULL, 4, NULL);
     xTaskCreate(task_Encoder, "Encoder", 128, NULL, 5, NULL);
 
     xTaskCreate(task_UART_RX, "UART-RX", 512, NULL, 2, NULL);
