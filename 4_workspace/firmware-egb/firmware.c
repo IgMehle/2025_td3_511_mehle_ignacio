@@ -1317,10 +1317,10 @@ void task_BH1750(void *pvParams)
             bh1750_init(ONESHOT_LORES);
             xSemaphoreGive(m_i2c);
             // Paso a la cola
-            // xQueueOverwrite(q_lux, &lux);
-            xQueueSend(q_lux, &lux, portMAX_DELAY);
+            xQueueOverwrite(q_lux, &lux);
+            // xQueueSend(q_lux, &lux, portMAX_DELAY);
             // Give semaforo de muestra de lux
-            // xSemaphoreGive(s_lux);
+            xSemaphoreGive(s_lux);
         }
         // Corre cada LUX_TIME
         vTaskDelayUntil(&last_tick, pdMS_TO_TICKS(LUX_TIME));
@@ -1408,9 +1408,11 @@ void task_Control(void *pvParams)
         }
         // Hay lectura del luxometro ?
         // No lo hacemos bloqueante para que pueda imprimir dentro del tiempo de medicion
-        // if(xSemaphoreTake(s_lux, portMAX_DELAY) == pdPASS){
-            // xQueuePeek(q_lux, &lux, 0);
-        if(xQueueReceive(q_lux, &lux, 0) == pdPASS){
+
+        // if(xQueueReceive(q_lux, &lux, 0) == pdPASS){
+        if(xSemaphoreTake(s_lux, 0) == pdPASS){
+            xQueuePeek(q_lux, &lux, 0);
+
             //////////////////////////////////////////
             ///// CONTROL PID ////////////////////////
             // ap = kp*error;
@@ -1657,8 +1659,8 @@ int main()
     q_uart_tx = xQueueCreate(8, UART_BUFFER_SIZE);
 
     // Creo semaforos binarios y los libero
-    //vSemaphoreCreateBinary(s_lux);
-    //xSemaphoreGive(s_lux);
+    vSemaphoreCreateBinary(s_lux);
+    xSemaphoreGive(s_lux);
     vSemaphoreCreateBinary(s_rtc);
     xSemaphoreGive(s_rtc);
     vSemaphoreCreateBinary(s_refresh);
