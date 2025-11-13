@@ -5,12 +5,12 @@
     compatible = "brcm,bcm2711";
 
     fragment@0 {
-        target = <&uart1>;
+        target-path = "&uart1";
         __overlay__ {
-            status = "okay";
 
             td3_uart: td3_uart {
-                compatible = "brightlight,td3_uart";
+                compatible = "utn-fra-td3,td3_uart";
+                status = "okay";
             };
         };
     };

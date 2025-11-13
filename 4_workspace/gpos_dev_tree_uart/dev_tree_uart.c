@@ -22,10 +22,12 @@
 
 // IDs de serial devices
 static struct of_device_id serdev_ids[] = {
-	{ .compatible = "brightlight,td3_uart" },
+	{ .compatible = "utn-fra-td3,td3_uart" },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, serdev_ids);
+MODULE_ALIAS("of:utn-fra-td3,td3_uart");
+MODULE_ALIAS("serdev:utn-fra-td3,td3_uart");
 
 // Puntero global para UART
 static struct serdev_device *g_serdev = NULL;
