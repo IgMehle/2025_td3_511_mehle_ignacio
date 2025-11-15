@@ -154,7 +154,7 @@ static int __init chrdev_init(void) {
 		unregister_chrdev_region(chrdev_number, CHRDEV_COUNT);
 		printk(KERN_ERR "%s: No se pudo crear la clase del char device\n", AUTHOR);
 		return -1;
-	}
+	}git status
 
 	// Creo el archivo del char device
 	if(IS_ERR(device_create(chrdev_class, NULL, chrdev_number, NULL, AUTHOR))) {
