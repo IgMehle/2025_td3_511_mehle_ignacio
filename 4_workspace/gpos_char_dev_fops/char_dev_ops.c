@@ -186,4 +186,4 @@ module_exit(chrdev_exit);
 // Informacion del modulo
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR(AUTHOR);
-MODULE_DESCRIPTION("Modulo que ");
+MODULE_DESCRIPTION("Modulo de prueba de escritura de char device");

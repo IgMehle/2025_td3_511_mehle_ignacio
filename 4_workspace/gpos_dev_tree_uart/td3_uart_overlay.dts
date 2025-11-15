@@ -5,7 +5,7 @@
     compatible = "brcm,bcm2711";
 
     fragment@0 {
-        target-path = "&uart1";
+        target-path = "&uart0";
         __overlay__ {
 
             td3_uart: td3_uart {
