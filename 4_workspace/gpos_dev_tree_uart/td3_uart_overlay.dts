@@ -5,12 +5,10 @@
     compatible = "brcm,bcm2711";
 
     fragment@0 {
-        target-path = "&uart0";
+        target = <&serial1>;     /* ESTE es el UART correcto */
         __overlay__ {
-
             td3_uart: td3_uart {
                 compatible = "utn-fra-td3,td3_uart";
-                status = "okay";
             };
         };
     };

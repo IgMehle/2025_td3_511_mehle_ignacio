@@ -20,6 +20,8 @@
 // Cantidad maxima de bytes para el buffer de usuario
 #define SHARED_BUFF_SIZE	128
 
+#define RX_FILE "/home/user/egb/rx.txt"
+
 // IDs de serial devices
 static struct of_device_id serdev_ids[] = {
 	{ .compatible = "utn-fra-td3,td3_uart" },
@@ -32,27 +34,62 @@ MODULE_DEVICE_TABLE(of, serdev_ids);
 // Puntero global para UART
 static struct serdev_device *g_serdev = NULL;
 
+/*
+static void td3_uart_write_file(const char *msg)
+{
+    struct file *filp;
+    loff_t pos = 0;
+    ssize_t bytes_written;
+
+    // Abro archivo de respuestaas en modo append
+    filp = filp_open(RX_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (IS_ERR(filp)) {
+        pr_err("td3_uart: No se pudo abrir /home/user/egb/rx.txt\n");
+        return;
+    }
+    // Escribo en el archivo
+    bytes_written = kernel_write(filp, msg, strlen(data), &pos);
+    if (bytes_written < 0) {
+        pr_err("Error al escribir archivo\n");
+        filp_close(file, NULL);
+        return bytes_written;
+    }
+    pr_info("td3_uart_rx: %zd bytes escritos\n", bytes_written);
+
+    // Cierro archivo
+    filp_close(filp, NULL);
+    return 0;
+}
+*/
+
 /**
  * @brief Llamada cuando se recibe mensaje por UART
 */
-static size_t td3_uart_recv(struct serdev_device *serdev, const unsigned char *buffer, size_t size) {
+static int td3_uart_recv(struct serdev_device *serdev, const unsigned char *buffer, size_t size) {
 	// Puntero a cadena
 	static char str[SHARED_BUFF_SIZE] = {0};
 	static int i = 0;
+    // Puntero a caracteres
+    char c = *buffer;
+
 	// Veo si es un caracter valido
-	if(*buffer) {
+	if(c != 0) {
 		// Copio el caracter
-		str[i++] = *buffer;
+		str[i++] = c;
 	}
-	// Verifico si me excedi
-	if(i == SHARED_BUFF_SIZE || str[i-1] == '\0') {
+	// Si llega fin de línea o se llenó buffer → procesar
+	if (c == '\n' || c == '\r' || i >= SHARED_BUFF_SIZE-1) {
+        // Terminar string
+        str[i] = '\0'; 
 		// Imprimo el mensaje recibido
 		printk(KERN_INFO "%s: Se recibieron %d bytes por UART. El mensaje fue '%s'\n", AUTHOR, i-1, str);
-		// Reinicio las variables
+		 // === ESCRIBIR AL ARCHIVO ===
+        // td3_write_to_file(str);
+        // Reinicio las variables
 		memset(str, 0, i);
 		i = 0;
 	}
-	return size;
+	return (int) size;
 }
 
 // Estructura de operaciones para UART
@@ -141,6 +178,36 @@ static ssize_t cdev_echo_read(struct file *f, char __user *buff, size_t size, lo
 /**
  * @brief Se llama cuando se escribe el archivo
 */
+/*
+static ssize_t cdev_echo_write(struct file *f, const char __user *buff, size_t size, loff_t *off) {
+	// Variables para cantidad de bytes escritos
+	int not_copied;
+    size_t to_copy = min(size, (size_t)(SHARED_BUFF_SIZE - 1));
+
+	// Copio del user a shared buffer
+	not_copied = copy_from_user(shared_buffer, buff, to_copy);
+    // Aseguro terminacion de string
+    shared_buffer[to_copy - not_copied] = '\0';
+	// Mensaje testigo para el kernel
+	printk("%s: Escrito sobre /dev/%s - %s\n", AUTHOR, CDEV_NAME, shared_buffer);
+
+	// Mando el mensaje por UART
+	if(g_serdev != NULL) {
+		int sent = serdev_device_write( g_serdev, 
+                                        shared_buffer, 
+                                        strlen(shared_buffer),
+                                        0);
+		printk("%s: Se enviaron %d bytes por UART\n", AUTHOR, sent);
+	}
+    else printk(KERN_ERR "%s: UART no inicializado.\n", AUTHOR);
+    // Devuelvo la cantidad de bytes que se copiaron
+	return to_copy - not_copied;
+}
+*/
+
+/**
+ * @brief Se llama cuando se escribe el archivo
+*/
 static ssize_t cdev_echo_write(struct file *f, const char __user *buff, size_t size, loff_t *off) {
 	// Variables para cantidad de bytes escritos
 	int not_copied, to_copy = (size > SHARED_BUFF_SIZE)? SHARED_BUFF_SIZE : size;
@@ -187,7 +254,7 @@ static int __init td3_uart_init(void) {
 		return -1;
 	}
 	// Creo estructura de clase
-	td3_cdev.cdev_class = class_create(CDEV_NAME);
+	td3_cdev.cdev_class = class_create(THIS_MODULE, CDEV_NAME);
 	// Verifico si fue posible
 	if(IS_ERR(td3_cdev.cdev_class)) {
 		// Error
