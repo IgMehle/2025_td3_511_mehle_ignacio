@@ -1,0 +1,35 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+    compatible = "brcm,bcm2837";      // RPi 3 SoC
+    /* También podés agregar: "brcm,bcm2710"; */
+
+    /* ===== Fragmento principal: habilita UART0 y agrega tu nodo serdev ===== */
+    fragment@0 {
+        target-path = "/soc/serial@7e201000";   // UART0 (PL011)
+        __overlay__ {
+            status = "okay";
+            pinctrl-names = "default";
+            pinctrl-0 = <&uart0_pins>;
+
+            td3_uart: td3_uart {
+                compatible = "utn-fra-td3,td3_uart";
+                status = "okay";
+            };
+        };
+    };
+
+    /* ===== Fragmento para definir los pines TX/RX de UART0 ===== */
+    fragment@1 {
+        target = <&gpio>;
+        __overlay__ {
+
+            uart0_pins: uart0_pins {
+                brcm,pins = <14 15>;     // GPIO14 = TX0, GPIO15 = RX0
+                brcm,function = <4>;     // ALT0 para PL011 (UART0)
+                brcm,pull = <0 0>;       // Sin resistencias internas
+            };
+        };
+    };
+};
