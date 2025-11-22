@@ -1,0 +1,155 @@
+echo "dtoverlay=disable-bt" | sudo tee -a /boot/config.txt
+echo "enable_uart=1" | sudo tee -a /boot/config.txt
+echo "dtoverlay=td3_uart_overlay" | sudo tee -a /boot/config.txt
+
+sudo systemctl disable --now hciuart.service
+sudo reboot
+
+Modificar el dts asi:
+
+/dts-v1/;
+/plugin/;
+
+/ {
+    compatible = "brcm,bcm2711";
+
+    fragment@0 {
+        target-path = "/soc/serial@7e201000";
+        _overlay_ {
+
+            td3_uart: td3_uart {
+                compatible = "utn-fra-td3,td3_uart";
+                status = "okay";
+            };
+        };
+    };
+};
+
+Modificar tambien el .compatible en el .c del modulo:
+
+// IDs de serial devices
+static struct of_device_id serdev_ids[] = {
+        { .compatible = "utn-fra-td3,td3_uart" },
+        { }
+};
+MODULE_DEVICE_TABLE(of, serdev_ids);
+
+// dts para kernel 6.1
+
+/dts-v1/;
+/plugin/;
+
+/ {
+    compatible = "brcm,bcm2711";
+
+    fragment@0 {
+        target-path = "/soc/serial@7e201000";
+        __overlay__ {
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            td3_uart: td3_uart@0 {
+                compatible = "utn-fra-td3,td3_uart";
+                reg = <0>;
+                status = "okay";
+            };
+        };
+    };
+
+    fragment@1 {
+        target-path = "/soc/serial@7e201000";
+        __overlay__ {
+            serdev0 = <&td3_uart>;
+        };
+    };
+};
+
+// guardo por las dudas
+static int td3_uart_recv(struct serdev_device *serdev, const unsigned char *buffer, size_t size) {
+        // Puntero a cadena
+        static char str[SHARED_BUFF_SIZE] = {0};
+        static int i = 0;
+    // Puntero a caracteres
+    char c = *buffer;
+
+        // Veo si es un caracter valido
+        if(c != 0) {
+                // Copio el caracter
+                str[i++] = c;
+        }
+        // Si llega fin de línea o se llenó buffer → procesar
+        if (c == '\n' || c == '\r' || i >= SHARED_BUFF_SIZE-1) {
+        // Terminar string
+        str[i] = '\0';
+                // Imprimo el mensaje recibido
+                printk(KERN_INFO "%s: Se recibieron %d bytes por UART. El mensaje fue '%s'\n", AUTHOR>
+                 // === ESCRIBIR AL ARCHIVO ===
+        // td3_write_to_file(str);
+        // Reinicio las variables
+                memset(str, 0, i);
+                i = 0;
+        }
+        return (int) size;
+}
+
+// ACA ESTAN LOS HEADERS 5.15.84.v7l
+https://archive.raspberrypi.org/debian/pool/main/r/raspberrypi-firmware/raspberrypi-kernel-headers_1.20230106-1_armhf.deb
+
+// CONFIGURAR REPOS LEGACY
+sudo nano /etc/apt/sources.list
+	deb http://archive.debian.org/debian bullseye main contrib non-free
+	deb http://archive.debian.org/debian-security bullseye-security main contrib non-free
+	deb http://archive.debian.org/debian bullseye-updates main contrib non-free
+
+sudo nano /etc/apt/sources.list.d/raspi.list
+
+	deb http://archive.raspberrypi.org/debian bullseye main
+
+// desactivar caducidad
+echo 'Acquire::Check-Valid-Until "false";' | sudo tee /etc/apt/apt.conf.d/10-no-check-valid
+// actualizar
+sudo apt update --allow-releaseinfo-change
+
+// instalar toolchain
+sudo apt install build-essential bc bison flex libssl-dev libncurses-dev -y
+sudo apt install raspberrypi-kernel-headers -y
+
+// verificar que coincidan
+uname -r
+# → 5.15.xx-v8+
+
+ls -l /lib/modules/$(uname -r)/build
+# → Symlink al directorio correcto de headers
+
+// DESVINCULAR BLUETOOTH DEL UART0 y vincular td3_uart_overlay en caliente
+echo "dtoverlay=disable-bt" | sudo tee -a /boot/config.txt
+echo "enable_uart=1" | sudo tee -a /boot/config.txt
+echo "dtoverlay=td3_uart_overlay" | sudo tee -a /boot/config.txt
+sudo systemctl disable --now hciuart.service
+sudo reboot
+
+// FUNCIONES UTILES PARA VERIFICAR EL OVERLAY Y EL DEVICE
+grep -R "utn-fra-td3" -n /proc/device-tree/
+ls /proc/device-tree/soc/serial@7e201000/
+cat /proc/device-tree/soc/serial@7e201000/td3_uart/compatible
+dmesg | grep ttyAMA0
+ls /sys/bus/serial/
+ls /sys/bus/serial/devices/
+cat /sys/bus/serial/devices/serial0-0/of_node/compatible
+
+sudo dtoverlay -l
+grep -R "utn-fra-td3" -n /proc/device-tree/
+ls /proc/device-tree/soc/serial@7e201000/
+ls /sys/bus/serial/devices/
+cat /sys/bus/serial/devices/serial0-0/of_node/compatible
+
+// COMPILAR DTS Y CARGARLO
+dtc -@ -I dts -O dtb -o td3_uart_overlay.dtbo td3_uart_overlay.dts
+sudo cp td3_uart_overlay.dtbo /boot/overlays/
+sudo dtoverlay td3_uart_overlay
+
+// VERIFICAR NODO
+grep -R "utn-fra-td3" -n /proc/device-tree/
+ls /sys/bus/serial/devices/
+cat /sys/bus/serial/devices/serial0-0/of_node/compatible
+
