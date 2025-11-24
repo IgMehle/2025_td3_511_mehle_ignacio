@@ -23,45 +23,35 @@ if (EXISTS ${picoVscode})
     include(${picoVscode})
 endif()
 # ====================================================================================
-set(PICO_BOARD pico2 CACHE STRING "Board type")
+set(PICO_BOARD pico CACHE STRING "Board type")
 
 # Pull in Raspberry Pi Pico SDK (must be before project)
 include(pico_sdk_import.cmake)
 
-project(i2c-slave-test C CXX ASM)
+project(blink_timer_pico1 C CXX ASM)
 
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
 
-add_executable(i2c-slave-test i2c-slave-test.c )
+add_executable(blink_timer_pico1 blink_timer_pico1.c )
 
-pico_set_program_name(i2c-slave-test "i2c-slave-test")
-pico_set_program_version(i2c-slave-test "0.1")
+pico_set_program_name(blink_timer_pico1 "blink_timer_pico1")
+pico_set_program_version(blink_timer_pico1 "0.1")
 
 # Modify the below lines to enable/disable output over UART/USB
-pico_enable_stdio_uart(i2c-slave-test 0)
-pico_enable_stdio_usb(i2c-slave-test 1)
-
-# Configuración adicional de FreeRTOS de la aplicación (si el archivo existe)
-set(FREERTOS_USER_CONFIG "${CMAKE_CURRENT_LIST_DIR}" CACHE PATH "User FreeRTOSConfig path")
-# Habilito uso de memoria dinámica
-set(FREERTOS_SUPPORT_DYNAMIC_ALLOCATION "ON" CACHE PATH "FreeRTOS dynamic memory implementation support")
-
-# Add external FreeRTOS library
-add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../freertos ${CMAKE_BINARY_DIR}/freertos)
+pico_enable_stdio_uart(blink_timer_pico1 0)
+pico_enable_stdio_usb(blink_timer_pico1 1)
 
 # Add the standard library to the build
-target_link_libraries(i2c-slave-test
-        pico_stdlib
-        hardware_i2c
-        freertos)
+target_link_libraries(blink_timer_pico1
+        pico_stdlib)
 
 # Add the standard include files to the build
-target_include_directories(i2c-slave-test PRIVATE
+target_include_directories(blink_timer_pico1 PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}
 )
 
-pico_add_extra_outputs(i2c-slave-test)
+pico_add_extra_outputs(blink_timer_pico1)
 

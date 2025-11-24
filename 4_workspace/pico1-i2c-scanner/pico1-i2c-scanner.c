@@ -6,9 +6,20 @@
 #define SDA_PIN 4
 #define SCL_PIN 5
 
+bool heartbeat_callback(repeating_timer_t *t) {
+    static bool state = 0;
+    gpio_put(PICO_DEFAULT_LED_PIN, state ^= 1);
+    return true; // seguir llamando
+}
+
 int main() {
     stdio_init_all();
     sleep_ms(1500);
+
+    gpio_init(PICO_DEFAULT_LED_PIN);
+    gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
+    repeating_timer_t timer;
+    add_repeating_timer_ms(500, heartbeat_callback, NULL, &timer);
 
     printf("=== I2C Scanner ===\n");
 
@@ -22,7 +33,7 @@ int main() {
         printf("Escaneando...\n");
         for (uint8_t addr = 1; addr < 0x7F; addr++) {
             uint8_t dummy = 0x00;
-            int res = i2c_write_blocking(I2C_PORT, addr, &dummy, 1, true);
+            int res = i2c_write_blocking(I2C_PORT, addr, &dummy, 1, false);
             if (res == 1) {
                 printf("  Encontrado dispositivo en 0x%02X\n", addr);
             }

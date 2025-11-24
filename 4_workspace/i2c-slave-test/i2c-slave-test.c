@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
+#include "pico/i2c_slave.h"
 // Headers de FreeRTOS
 #include "FreeRTOS.h"
 #include "task.h"
@@ -10,6 +11,10 @@
 #include "semphr.h"
 
 #define LED_RUN_PIN     25
+
+#define UART_ID    uart0
+#define UART_TXPIN 0
+#define UART_RXPIN 1
 
 #define I2C0_SDA_PIN    4
 #define I2C0_SCL_PIN    5
@@ -19,11 +24,14 @@
 #define REMOTE_BUFFER_SIZE  128
 
 // ==== BUFFERS ====
-static char rx_line[REMOTE_BUFFER_SIZE];
-static int  rx_index = 0;
+#define BUF_SIZE   128
 
-static char reply_buffer[REMOTE_BUFFER_SIZE];
+static char   rx_line[BUF_SIZE];
+static size_t rx_idx = 0;
+
+static char   reply_buffer[BUF_SIZE];
 static size_t reply_len = 0;
+static size_t reply_idx = 0;
 
 // Queues de manejo de i2c slave
 QueueHandle_t q_remote_rx = NULL;
@@ -301,42 +309,61 @@ void remote_cmd_get(const char *args)
 // =====================================================
 //              ISR I2C - SLAVE
 // =====================================================
-void ISR_i2c_slave(void)
+static void ISR_i2c_slave(i2c_inst_t *i2c, i2c_slave_event_t event)
 {
-    i2c_inst_t *i2c = i2c0;
+    static bool led_state = false;
 
-    // --- MASTER WRITE (RX) ---
-    while (i2c_get_read_available(i2c)) {
-        uint8_t c = i2c_read_byte_raw(i2c);
+    switch (event) {
+    case I2C_SLAVE_RECEIVE:
+        // El master nos está escribiendo datos
+        while (i2c_get_read_available(i2c)) {
+            uint8_t c = i2c_read_byte_raw(i2c);
 
-        if (c == '\n' || c == '\r') {
-            if (rx_index > 0) {
-                rx_line[rx_index] = 0;
+            if (c == '\n' || c == '\r') {
+                if (rx_idx > 0) {
+                    rx_line[rx_idx] = 0;
 
-                BaseType_t xHPW = pdFALSE;
-                xQueueSendFromISR(q_remote_rx, rx_line, &xHPW);
-                rx_index = 0;
-                portYIELD_FROM_ISR(xHPW);
+                    // Debug por UART
+                    printf("[MST] %s\n", rx_line);
+
+                    // Mando linea a la cola
+                    BaseType_t xHPW = pdFALSE;
+                    xQueueSendFromISR(q_remote_rx, rx_line, &xHPW);
+                    rx_idx = 0;
+                    portYIELD_FROM_ISR(xHPW);
+                }
+            } else if (rx_idx < BUF_SIZE - 1) {
+                rx_line[rx_idx++] = (char)c;
             }
-        } else if (rx_index < REMOTE_BUFFER_SIZE - 1) {
-            rx_line[rx_index++] = c;
         }
-    }
+        break;
 
-    // --- MASTER READ (TX) ---
-    static size_t idx = 0;
-
-    while (i2c_get_write_available(i2c)) {
-        if (reply_len == 0) {
-            i2c_write_byte_raw(i2c, 0); // nada para enviar
-            continue;
+    case I2C_SLAVE_REQUEST:
+        // El master está leyendo de nosotros
+        while (i2c_get_write_available(i2c)) {
+            uint8_t c = 0;
+            // Copio caracteres en reply_buffer
+            if (reply_idx < reply_len) {
+                c = (uint8_t) reply_buffer[reply_idx++];
+            } else {
+                // Si no hay nada más que mandar, mandamos 0
+                c = 0;
+            }
+            // Escribo caracter a enviar
+            i2c_write_byte_raw(i2c, c);
         }
+        break;
 
-        if (idx >= reply_len)
-            idx = 0;
-
-        i2c_write_byte_raw(i2c, reply_buffer[idx++]);
+    case I2C_SLAVE_FINISH:
+        // Se terminó la transacción (STOP).
+        // Reseteo indices
+        rx_idx      = 0;
+        reply_idx   = 0;
+        break;
     }
+    // Toggle LED para ver actividad I2C
+    led_state = !led_state;
+    gpio_put(PICO_DEFAULT_LED_PIN, led_state);
 }
 
 // =====================================================
@@ -348,7 +375,7 @@ void task_REMOTE_RX(void *pvParams)
 
     for (;;) {
         if (xQueueReceive(q_remote_rx, buffer, portMAX_DELAY) == pdTRUE) {
-
+            // Separo comandos set y get
             if (strncmp(buffer, "set", 3) == 0)
                 remote_cmd_set(buffer);
 
@@ -371,12 +398,12 @@ void task_REMOTE_TX(void *pvParams)
 
     for (;;) {
         if (xQueueReceive(q_remote_tx, msg, portMAX_DELAY) == pdTRUE) {
-
             // Copio msg → reply_buffer
+            taskENTER_CRITICAL();
             strncpy(reply_buffer, msg, sizeof(reply_buffer));
             reply_buffer[REMOTE_BUFFER_SIZE - 1] = 0;
-
             reply_len = strlen(reply_buffer);
+            taskEXIT_CRITICAL();
         }
     }
 }
@@ -386,28 +413,11 @@ void task_REMOTE_TX(void *pvParams)
 // =====================================================
 void task_LedRun(void *pvParams)
 {
+    bool led_state = true;
     for(;;){
-        gpio_put(LED_RUN_PIN, true);
-        vTaskDelay(pdMS_TO_TICKS(500));
-        gpio_put(LED_RUN_PIN, false);
+        gpio_put(LED_RUN_PIN, led_state ^= true);
         vTaskDelay(pdMS_TO_TICKS(500));
     }
-}
-
-void task_REMOTE_I2C_INIT(void *p) {
-    // IMPORTANTE: DAR TIEMPO A QUE EL USB ARRANQUE
-    vTaskDelay(pdMS_TO_TICKS(500));
-
-    printf("[I2C] Iniciando modo SLAVE...\n");
-
-    i2c_set_slave_mode(i2c0, true, I2C0_ADDR);
-
-    irq_set_exclusive_handler(I2C0_IRQ, ISR_i2c_slave);
-    irq_set_enabled(I2C0_IRQ, true);
-
-    printf("[I2C] SLAVE listo.\n");
-
-    vTaskDelete(NULL);
 }
 
 // =====================================================
@@ -415,21 +425,43 @@ void task_REMOTE_I2C_INIT(void *p) {
 // =====================================================
 int main()
 {
-    stdio_init_all();
+    // NO usar stdio_init_all(): rompe el I2C0 slave por USB-CDC
+    stdio_uart_init_full(UART_ID, 115200, UART_TXPIN, UART_RXPIN);
+    sleep_ms(500);
+    printf("Pico2 I2C0 SLAVE echo + UART0 debug\n");
+
     // Init LED RUN
     gpio_init(LED_RUN_PIN);
     gpio_set_dir(LED_RUN_PIN, true);
     gpio_put(LED_RUN_PIN, true);
-
+    
     // creo queues de comunicacion remota (i2c slave)
     q_remote_rx = xQueueCreate(5, REMOTE_BUFFER_SIZE);
     q_remote_tx = xQueueCreate(10, REMOTE_BUFFER_SIZE);
+
+    // ---- Init I2C0 en modo master (velocidad) ----
+    // pico_i2c_slave se encarga después de pasarlo a slave
+    // i2c_init(i2c0, I2C0_BAUD);
+
+    gpio_set_function(I2C0_SDA_PIN, GPIO_FUNC_I2C);
+    gpio_set_function(I2C0_SCL_PIN, GPIO_FUNC_I2C);
+    gpio_pull_up(I2C0_SDA_PIN);
+    gpio_pull_up(I2C0_SCL_PIN);
+
+    printf("SDA FUNC=%d SCL FUNC=%d\n",
+           gpio_get_function(I2C0_SDA_PIN),
+           gpio_get_function(I2C0_SCL_PIN));
+
+    // ---- Pasar I2C0 a modo SLAVE usando la librería ----
+    i2c_slave_init(i2c0, I2C0_ADDR, ISR_i2c_slave);
+
+    printf("I2C0 SLAVE listo en addr 0x%02X\n", I2C0_ADDR);
+    printf("Esperando comandos desde master...\n");
 
     // Creo tareas
     xTaskCreate(task_LedRun, "RUN", 128, NULL, 1, NULL);
     xTaskCreate(task_REMOTE_RX, "I2C-RX", 512, NULL, 2, NULL);
     xTaskCreate(task_REMOTE_TX, "I2C-TX", 512, NULL, 1, NULL);
-    xTaskCreate(task_REMOTE_I2C_INIT, "I2C-INIT", 256, NULL, 3, NULL);
     
     // START SCHEDULER
     vTaskStartScheduler();

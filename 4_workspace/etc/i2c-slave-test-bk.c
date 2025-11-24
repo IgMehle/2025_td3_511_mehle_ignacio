@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
+#include "pico/i2c_slave.h"
 // Headers de FreeRTOS
 #include "FreeRTOS.h"
 #include "task.h"
@@ -10,6 +11,10 @@
 #include "semphr.h"
 
 #define LED_RUN_PIN     25
+
+#define UART_ID    uart0
+#define UART_TXPIN 0
+#define UART_RXPIN 1
 
 #define I2C0_SDA_PIN    4
 #define I2C0_SCL_PIN    5

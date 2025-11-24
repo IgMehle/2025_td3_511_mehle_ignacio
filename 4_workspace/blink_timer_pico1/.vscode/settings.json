@@ -39,12 +39,6 @@
     "raspberry-pi-pico.ninjaPath": "${HOME}/.pico-sdk/ninja/v1.12.1/ninja",
     "files.associations": {
         "stdlib.h": "c",
-        "gpio.h": "c",
-        "stdio.h": "c",
-        "time.h": "c",
-        "pico.h": "c",
-        "irq.h": "c",
-        "m0plus.h": "c",
-        "string.h": "c"
+        "time.h": "c"
     }
 }

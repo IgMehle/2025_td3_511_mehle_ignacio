@@ -11,8 +11,21 @@
 
 #define BUF_SIZE 128
 
+bool heartbeat_callback(repeating_timer_t *t) {
+    static bool state = 0;
+    gpio_put(PICO_DEFAULT_LED_PIN, state ^= 1);
+    return true; // seguir llamando
+}
+
 int main() {
     stdio_init_all();          // USB-CDC para consola
+
+    gpio_init(PICO_DEFAULT_LED_PIN);
+    gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
+
+    repeating_timer_t timer;
+    add_repeating_timer_ms(500, heartbeat_callback, NULL, &timer);
+
     sleep_ms(1500);
     printf("=== Pico1 I2C1 MASTER Test ===\n");
     printf("Escribe un comando y ENTER\n");

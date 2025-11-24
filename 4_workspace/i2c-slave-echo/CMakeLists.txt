@@ -47,7 +47,8 @@ pico_enable_stdio_usb(i2c-slave-echo 0)
 # Add the standard library to the build
 target_link_libraries(i2c-slave-echo
         pico_stdlib
-        hardware_i2c)
+        hardware_i2c
+        pico_i2c_slave)
 
 # Add the standard include files to the build
 target_include_directories(i2c-slave-echo PRIVATE
