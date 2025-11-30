@@ -2,33 +2,17 @@
 /plugin/;
 
 / {
-    /* Compatibilidad cruzada Pi 5 / Pi 4 / Pi 3 */
-    compatible = "brcm,bcm2712", "brcm,bcm2711", "brcm,bcm2835";
+    compatible = "brcm,bcm2711";  /* Raspberry Pi 4B */
 
-    /*
-     * mini-UART — serial1 — dirección 0x7e215040
-     * Este UART sí expone serdev en BCM2711/2712 (Pi4/Pi5)
-     */
     fragment@0 {
-        target-path = "/soc/serial@7e215040";   // mini-UART (AUX UART1)
-
+        target = <&uart0>;        /* Usamos UART0 (ttyAMA0 en tu caso) */
         __overlay__ {
             status = "okay";
 
-            /* Nodo hijo serdev para tu driver */
-            td3_uart: td3_uart@0 {
-                compatible = "utn-fra-td3,td3_uart";
+            uart_hello: uart_hello {
+                compatible = "frankie,uart-hello";
                 status = "okay";
             };
-        };
-    };
-
-    /* Conexión serdev del hijo al bus del UART */
-    fragment@1 {
-        target-path = "/soc/serial@7e215040";
-
-        __overlay__ {
-            serdev0 = <&td3_uart>;
         };
     };
 };

@@ -1,0 +1,7 @@
+https://www.youtube.com/watch?v=PVEUwR1BHyk
+https://github.com/decryptec/Raspi_serial_drivers/tree/main/uart
+
+LET'S CODE A LINUX DRIVER
+https://www.youtube.com/playlist?list=PLCGpd0Do5-I3b5TtyqeF1UdyD4C-S-dMa
+https://github.com/Johannes4Linux/Linux_Driver_Tutorial
+
