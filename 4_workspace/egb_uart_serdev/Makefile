@@ -1,8 +1,8 @@
 # Etiqueta para definir el nombre del archivo con el codigo del modulo
-FILE := uart_hello_serdev
-DEV_TREE := uart_hello
+FILE := egb_uart_serdev
+DEV_TREE := egb_uart_serdev
 # Define el autor del modulo (coincide con el del codigo del modulo)
-AUTHOR := IgMehle
+AUTHOR := Eirea-Mehle
 # Directorio donde se encuentra el kernel
 KDIR := /lib/modules/$(shell uname -r)/build
 # Directorio destino de archivos de compilacion
@@ -38,7 +38,6 @@ unload-devtree:
 # Carga el modulo en el kernel
 insmod:
 	@sudo insmod build/${FILE}.ko
-	@sudo chmod 666 /dev/${AUTHOR}
 
 # Quita el modulo del kernel
 rmmod:

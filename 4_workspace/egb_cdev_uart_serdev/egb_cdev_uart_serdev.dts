@@ -10,7 +10,7 @@
             status = "okay";
 
             uart_hello: uart_hello {
-                compatible = "igmehle,uart_hello";
+                compatible = "td3-egb,uart-serdev";
                 status = "okay";
             };
         };

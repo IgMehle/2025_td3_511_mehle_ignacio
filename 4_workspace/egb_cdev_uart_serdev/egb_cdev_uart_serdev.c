@@ -6,8 +6,8 @@
 #include <linux/of_device.h>
 #include <linux/string.h>
 
-#define DRIVER_NAME  "uart_hello"
-#define AUTHOR       "IgMehle"
+#define DRIVER_NAME  "egb_uart_serdev"
+#define AUTHOR       "Eirea-Mehle"
 
 /* Buffer para acumular una línea completa hasta '\n' */
 #define RX_LINE_BUF_SIZE 128
@@ -124,7 +124,7 @@ static void uart_hello_remove(struct serdev_device *serdev)
 }
 
 static const struct of_device_id uart_hello_of_match[] = {
-    { .compatible = "igmehle,uart_hello" },
+    { .compatible = "td3-egb,uart-serdev" },
     { /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, uart_hello_of_match);
