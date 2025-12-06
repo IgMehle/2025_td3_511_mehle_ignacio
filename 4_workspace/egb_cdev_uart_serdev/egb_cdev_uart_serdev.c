@@ -1,145 +1,323 @@
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
+// Headers para serdev
 #include <linux/serdev.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
+// Headres para char device
+#include <linux/cdev.h>
+#include <linux/device.h>
+#include <linux/fs.h>
+#include <linux/uaccess.h>
+// Headers utilitarios
 #include <linux/string.h>
 
-#define DRIVER_NAME  "egb_uart_serdev"
+// Defines deL modulo
+#define DRIVER_NAME "egb_uart_serdev"
+#define DEVICE_NAME "egb_uart"
+#define CLASS_NAME  "egb_uart_class" 
 #define AUTHOR       "Eirea-Mehle"
 
-/* Buffer para acumular una línea completa hasta '\n' */
-#define RX_LINE_BUF_SIZE 128
-static char  rx_line_buf[RX_LINE_BUF_SIZE];
-static size_t rx_line_len;
+// Definiciones del char device
+#define EGB_CDEV_MINOR  10
+#define EGB_CDEV_COUNT  1
 
-/*
- * Callback de recepción: vamos acumulando carácter por carácter
- * hasta encontrar '\n'. Recién ahí imprimimos la línea completa.
- */
-static size_t uart_hello_receive(struct serdev_device *serdev,
-                                 const unsigned char *buf,
-                                 size_t size)
+// Definiciones de la UART
+#define UART_BUFFER_SIZE  128
+#define UART_BAUDRATE   115200
+
+////////////////////////////////////////////////////////////////////
+//  UART-SERDEV DEFINICIONES
+////////////////////////////////////////////////////////////////////
+
+// Callbacks del serial device
+static int uart_serdev_probe(struct serdev_device *serdev);
+static void uart_serdev_remove(struct serdev_device *serdev);
+
+// Compatible devices
+static struct of_device_id uart_serdev_ids[] = {
+	{ .compatible = "td3-egb,uart-serdev"}, 
+    { /* sentinel */ }
+};
+MODULE_DEVICE_TABLE(of, uart_serdev_ids);
+
+// SERDEV CALLBACK STRUCT
+static struct serdev_device_driver uart_serdev_driver = {
+	.probe = uart_serdev_probe,
+	.remove = uart_serdev_remove,
+	.driver = {
+		.name = DRIVER_NAME,
+		.of_match_table = uart_serdev_ids,
+	},
+};
+
+//////////////////////////////////////////////////////////
+// CALLBACK RX SERDEV
+//////////////////////////////////////////////////////////
+static size_t uart_serdev_recv( struct serdev_device *serdev, 
+                                const unsigned char *buffer, 
+                                size_t size)
 {
+    static char rx_buffer[UART_BUFFER_SIZE];
+    static size_t rx_index = 0;
+
     size_t i;
-
     for (i = 0; i < size; i++) {
-        unsigned char ch = buf[i];
+        if (rx_index < UART_BUFFER_SIZE - 1) {
+            char c = buffer[i];
+            rx_buffer[rx_index++] = c;
 
-        if (ch == '\n') {
-            /* Cerrar string */
-            if (rx_line_len < RX_LINE_BUF_SIZE)
-                rx_line_buf[rx_line_len] = '\0';
-            else
-                rx_line_buf[RX_LINE_BUF_SIZE - 1] = '\0';
-
-            /* Si termina en '\r', lo recortamos */
-            if (rx_line_len > 0 && rx_line_buf[rx_line_len - 1] == '\r') {
-                rx_line_buf[rx_line_len - 1] = '\0';
+            if (c == '\n') {
+                rx_buffer[rx_index - 1] = '\0'; // Termino string
+                pr_info("serdev_recv - Mensaje recibido: %s\n", rx_buffer);
+                rx_index = 0;
             }
-
-            dev_info(&serdev->dev,
-                     "Linea completa recibida por UART: '%s'\n",
-                     rx_line_buf);
-
-            /* Reseteamos para la próxima línea */
-            rx_line_len = 0;
         } else {
-            /* Acumular mientras haya espacio */
-            if (rx_line_len < RX_LINE_BUF_SIZE - 1) {
-                rx_line_buf[rx_line_len++] = ch;
-            } else {
-                /*
-                 * Overflow del buffer de línea:
-                 * opcionalmente podríamos loguear que se truncó.
-                 * Por ahora simplemente descartamos lo que sobra.
-                 */
-            }
+            pr_warn("serdev_recv - Buffer overflow!\n");
+            rx_index = 0;
         }
     }
-
-    /* Indicamos que consumimos todos los bytes */
+    // return serdev_device_write_buf(serdev, buffer, size); // echo back
     return size;
 }
 
-static const struct serdev_device_ops uart_hello_ops = {
-    .receive_buf = uart_hello_receive,
-    /* .write_wakeup opcional, no la necesitamos para write_buf */
+// SERDEV OPERATIONS
+static const struct serdev_device_ops uart_serdev_ops = {
+	.receive_buf = uart_serdev_recv,
 };
 
-static int uart_hello_probe(struct serdev_device *serdev)
+///////////////////////////////////////////////////////////
+// SERDEV - PROBE()
+///////////////////////////////////////////////////////////
+static int uart_serdev_probe(struct serdev_device *serdev)
 {
-    int ret;
-    const char msg[] = "HELLO desde kernel via serdev!\r\n";
+    int status;
+    // Indico que entramos en la funcion probe()
+    pr_info("uart_serdev - Probe called\n");
 
-    /* Inicializamos el buffer de línea */
-    rx_line_len = 0;
+    // Seteo client operations
+    serdev_device_set_client_ops(serdev, &uart_serdev_ops);
 
-    dev_info(&serdev->dev, "uart_hello_probe: dispositivo encontrado\n");
-
-    /* Asociamos nuestras operaciones (RX) al serdev */
-    serdev_device_set_client_ops(serdev, &uart_hello_ops);
-
-    /* Abrimos el dispositivo UART */
-    ret = serdev_device_open(serdev);
-    if (ret) {
-        dev_err(&serdev->dev,
-                "No se pudo abrir el dispositivo serdev: %d\n", ret);
-        return ret;
+    // Abro device
+    status = serdev_device_open(serdev);
+    if (status) {
+        pr_err("uart_serdev - Error opening serial port (%d)\n", status);
+        return -status;
     }
 
-    /* Configuramos UART: 115200, sin control de flujo */
-    serdev_device_set_baudrate(serdev, 115200);
+    pr_info("uart_serdev - Configuring UART\n");
+    // Configuramos la UART
+    serdev_device_set_baudrate(serdev, UART_BAUDRATE);
     serdev_device_set_flow_control(serdev, false);
-    /* Paridad opcional:
-     * serdev_device_set_parity(serdev, SERDEV_PARITY_NONE);
-     */
+    serdev_device_set_parity(serdev, SERDEV_PARITY_NONE);
 
-    dev_info(&serdev->dev,
-             "Enviando mensaje inicial por UART (write_buf): \"%s\"\n", msg);
-
-    /* Usamos write_buf, igual que en el ejemplo EGB */
-    ret = serdev_device_write_buf(serdev, msg, strlen(msg));
-    if (ret < 0) {
-        dev_err(&serdev->dev,
-                "Error al enviar datos por UART (write_buf): %d\n", ret);
-        serdev_device_close(serdev);
-        return ret;
-    } else {
-        dev_info(&serdev->dev,
-                 "Se escribieron %d bytes por UART\n", ret);
-    }
-
-    dev_info(&serdev->dev,
-             "uart_hello_serdev listo. Lineas terminadas en \\n se mostraran completas en dmesg.\n");
+    // Envio comando de bienvenida
+    status = serdev_device_write_buf(serdev, "UART HABILITADA!", sizeof("UART HABILITADA!"));
+    pr_info("uart_serdev - UART configurado!\n");
 
     return 0;
 }
 
-static void uart_hello_remove(struct serdev_device *serdev)
+//////////////////////////////////////////////////////////////
+// SERDEV - REMOVE()
+//////////////////////////////////////////////////////////////
+static void uart_serdev_remove(struct serdev_device *serdev)
 {
-    dev_info(&serdev->dev, "uart_hello_remove: cerrando dispositivo\n");
+    pr_info("uart_serdev - Removiendo UART serdev...\n");
     serdev_device_close(serdev);
 }
 
-static const struct of_device_id uart_hello_of_match[] = {
-    { .compatible = "td3-egb,uart-serdev" },
-    { /* sentinel */ }
-};
-MODULE_DEVICE_TABLE(of, uart_hello_of_match);
+//////////////////////////////////////////////////////////////////
+// CHAR DEVICE EGB_UART
+//////////////////////////////////////////////////////////////////
 
-static struct serdev_device_driver uart_hello_driver = {
-    .probe  = uart_hello_probe,
-    .remove = uart_hello_remove,
-    .driver = {
-        .name           = DRIVER_NAME,
-        .of_match_table = of_match_ptr(uart_hello_of_match),
-    },
+// VARIABLES DEL CHAR DEVICE
+static cdev egb_cdev;
+static dev_t egb_cdev_number;
+static struct class *egb_class;
+
+// BUFFER DE RX
+static char shared_rxbf[UART_BUFFER_SIZE];
+// BUFFER DE TX
+static char shared_txbf[UART_BUFFER_SIZE];
+
+// PROTOTIPOS DEL CHAR DEVICE
+static ssize_t egb_uart_read(struct file *f, char __user *user_bf, size_t len, loff_t *offset);
+static ssize_t egb_uart_write(struct file *f, const char __user *user_bf, size_t len, loff_t *offset);
+
+// CHAR DEVICE FILE OPERATIONS
+static struct file_operations egb_fops = {
+    .owner = THIS_MODULE,
+    .read = egb_uart_read,
+    .write = egb_uart_write,
 };
 
-module_serdev_device_driver(uart_hello_driver);
+//////////////////////////////////////////////////////////////////
+// CHAR DEVICE EGB_CDEV_READ()
+//////////////////////////////////////////////////////////////////
+static ssize_t egb_uart_read(   struct file *f, 
+                                char __user *user_bf, 
+                                size_t len, 
+                                loff_t *offset)
+{
+    int not_copied;
+    int delta;
+    int to_copy = (len + *offset) < sizeof(shared_rxbf) ? len : (sizeof(shared_rxbf) - *offset);
+
+    pr_info("uart_read - Leyendo %d bytes, offset = %lld\n",
+            to_copy, *offset);
+    
+    if (*offset >= sizeof(shared_rxbf))
+		return 0;
+    
+    not_copied = copy_to_user(user_bf, &shared_rxbf[*offset], to_copy);
+    delta = to_copy - not_copied;
+
+    if (not_copied) 
+		pr_warn("uart_read - Solo se copiaron %d bytes\n", delta);
+    
+    *offset += delta;
+    return delta;
+}
+
+//////////////////////////////////////////////////////////////////
+// CHAR DEVICE EGB_CDEV_WRITE()
+//////////////////////////////////////////////////////////////////
+static ssize_t egb_uart_write(  struct file *f, 
+                                const char __user *user_bf, 
+                                size_t len, 
+                                loff_t *offset)
+{
+    int not_copied;
+    int delta;
+    int to_copy = (len + *offset) < sizeof(shared_rxbf) ? len : (sizeof(shared_rxbf) - *offset);
+
+    pr_info("uart_write - Escribiendo %d bytes, offset = %lld\n",
+            to_copy, *offset);
+    
+    if (*offset >= sizeof(shared_txbf))
+		return 0;
+    
+    not_copied = copy_from_user(&shared_txbf[*offset], user_bf, to_copy);
+    delta = to_copy - not_copied;
+
+    if (not_copied) 
+		pr_warn("uart_write - Solo se copiaron %d bytes\n", delta);
+    
+    *offset += delta;
+    return delta;
+}
+
+//////////////////////////////////////////////////////////////////
+// KERNEL MODULE INIT()
+//////////////////////////////////////////////////////////////////
+static int __init egb_init(void) {
+
+    int status = 0; // Respuestas de funciones
+
+    // Reservo memoria para crear el char device
+    // ALLOC_CHRDEV_REGION()
+    status = alloc_chrdev_region(   &egb_cdev_number, 
+                                    EGB_CDEV_MINOR,
+                                    EGB_CDEV_COUNT,
+                                    DEVICE_NAME);
+    // Verifico creacion exitosa
+    if(status){
+        pr_err("egb_init - Error reservando chrdev_region\n");
+        return status;
+    }
+
+    // Inicializo char device con las fops definidas - CDEV_INIT()
+    cdev_init(&egb_cdev, &egb_fops);
+    egb_cdev.owner = THIS_MODULE;
+
+    // Pongo el char device como disponible - CDEV_ADD()
+    status = cdev_add(  &egb_cdev,
+                        egb_cdev_number,
+                        EGB_CDEV_COUNT);
+    // Si no se pudo crear, libero memoria
+    if(status){
+        pr_err("egb_init - Error en add_cdev\n");
+        goto free_devnr;
+    }
+
+    // Informo que se creo el char device con exito
+    pr_info("egb_init - egb_cdev registrado con Major %d y Minor %d",
+            MAJOR(egb_cdev_number), MINOR(egb_cdev_number));
+
+    // Creo clase del cdev - CLASS_CREATE()
+    egb_class = class_create(CLASS_NAME);
+    // Si no se pudo crear la clase, borro cdev y libero memoria
+    if(!egb_class){
+        pr_err("egb_init - No pudo crearse la clase egb_uart_class"\n);
+        status = ENOMEM;
+        goto delete_cdev;
+    }
+
+    // Creo device en /dev/egb_uart - DEVICE_CREATE()
+    status = device_create( egb_class,
+                            NULL,
+                            egb_cdev_number,
+                            NULL,
+                            DEVICE_NAME);
+    // Si no se pudo crear, borro class, cdev y libero memoria
+    if(!status){
+        pr_error("egb_init - No se pudo crear device en /dev/%s\n", DEVICE_NAME);
+        status = ENOMEM;
+        goto delete_class;
+    }
+
+    // Informo que se creo el device en /dev
+    pr_info("egb_init - Device creado en /dev/egb_uart!\n");
+
+    // Creo el serdev
+	pr_info("egb_init - Creando uart_serdev_driver...\n");
+    status = serdev_device_driver_register(&uart_serdev_driver);
+    // Si no se pudo registrar el serdev...
+	if(status < 0){
+		printk("egb_init - Error! No se pudo registrar el serdev\n");
+		status = -1;
+        goto delete_device;
+	}
+
+    // INIT OK
+    pr_info("egb_init - Driver egb_uart_serdev registrado con éxito!\n");
+    return 0;
+
+    // MANEJO DE ERRORES ACUMULATIVO (gracias Johannes!)
+    delete_device:
+        device_destroy(egb_class, egb_cdev_number);
+    delete_class:
+        class_unregister(egb_class);
+        class_destroy(egb_class);
+    delete_cdev:
+        cdev_del(&egb_cdev);
+    free_devnr:
+        unregister_chrdev_region(egb_cdev_number, EGB_CDEV_COUNT);
+	    return status;
+}
+
+//////////////////////////////////////////////////////////////////
+// KERNEL MODULE EXIT()
+//////////////////////////////////////////////////////////////////
+static void __exit egb_exit(void) {
+	pr_info("egb_exit - Borrando serdev...\n");
+	serdev_device_driver_unregister(&uart_serdev_driver);
+    pr_info("egb_exit - Borrando device...\n");
+    device_destroy(egb_class, egb_cdev_number);
+    pr_info("egb_exit - Borrando class y cdev...\n");
+    class_unregister(egb_class);
+    class_destroy(egb_class);
+    cdev_del(&egb_cdev);
+    pr_info("egb_exit - Liberando device number...\n");
+    unregister_chrdev_region(egb_cdev_number, EGB_CDEV_COUNT);
+    pr_info("egb_exit - Finalizado!\n");
+}
+
+module_init(egb_init);
+module_exit(egb_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR(AUTHOR);
-MODULE_DESCRIPTION("Demo serdev: Hello UART TX+RX con acumulacion por linea en Raspberry Pi");
+MODULE_DESCRIPTION("Demo serdev (UART) en Raspberry Pi");

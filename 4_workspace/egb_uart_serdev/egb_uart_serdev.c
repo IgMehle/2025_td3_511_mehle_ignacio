@@ -90,7 +90,7 @@ static int uart_serdev_probe(struct serdev_device *serdev)
         return -status;
     }
 
-    pr_info("echo - Configuring UART\n");
+    pr_info("uart_serdev - Configuring UART\n");
     // Configuramos la UART
     serdev_device_set_baudrate(serdev, 115200);
     serdev_device_set_flow_control(serdev, false);

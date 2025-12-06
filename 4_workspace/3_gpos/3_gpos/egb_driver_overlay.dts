@@ -9,8 +9,8 @@
         __overlay__ {
             status = "okay";
 
-            egb_uart: egb_uart {
-                compatible = "td3-egb,uart-serdev";
+            egb_driver: egb_driver {
+                compatible = "frankie,egb-driver";
                 status = "okay";
             };
         };
