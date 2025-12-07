@@ -5,27 +5,39 @@
 #include <linux/serdev.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
-// Headres para char device
+// Headers para char device
 #include <linux/cdev.h>
 #include <linux/device.h>
 #include <linux/fs.h>
 #include <linux/uaccess.h>
 // Headers utilitarios
 #include <linux/string.h>
+#include <linux/file.h>
 
-// Defines deL modulo
+// Labels deL modulo
 #define DRIVER_NAME "egb_uart_serdev"
 #define DEVICE_NAME "egb_uart"
 #define CLASS_NAME  "egb_uart_class" 
-#define AUTHOR       "Eirea-Mehle"
+#define AUTHOR      "Eirea-Mehle"
 
-// Definiciones del char device
+// Labels del char device
 #define EGB_CDEV_MINOR  10
 #define EGB_CDEV_COUNT  1
 
-// Definiciones de la UART
+// Labels de la UART
 #define UART_BUFFER_SIZE  128
 #define UART_BAUDRATE   115200
+
+// Labels del archivo rx
+#define RX_FILE "/home/nacho/cli/rx.txt"
+
+//=================================================================
+//  VARIABLES GLOBALES
+//=================================================================
+// BUFFER DE RX
+static char shared_rxbf[UART_BUFFER_SIZE];
+// BUFFER DE TX
+static char shared_txbf[UART_BUFFER_SIZE];
 
 ////////////////////////////////////////////////////////////////////
 //  UART-SERDEV DEFINICIONES
@@ -62,23 +74,70 @@ static size_t uart_serdev_recv( struct serdev_device *serdev,
     static char rx_buffer[UART_BUFFER_SIZE];
     static size_t rx_index = 0;
 
+    // int status = 0;
     size_t i;
+
     for (i = 0; i < size; i++) {
-        if (rx_index < UART_BUFFER_SIZE - 1) {
+        if (rx_index < UART_BUFFER_SIZE - 2) {
+            // Leo caracter del buffer de uart
             char c = buffer[i];
+            // Agrego al buffer de recepcion
             rx_buffer[rx_index++] = c;
 
+            // Si el caracter que llega es salto de linea
             if (c == '\n') {
-                rx_buffer[rx_index - 1] = '\0'; // Termino string
+                // Termino string (manteniendo salto de linea)
+                rx_buffer[rx_index - 1] = '\n';
+                rx_buffer[rx_index] = '\0';
+                // Imprimo string
                 pr_info("serdev_recv - Mensaje recibido: %s\n", rx_buffer);
+                // Reset index
                 rx_index = 0;
+                // Limpio shared_rxbf
+                memset(shared_rxbf, 0, sizeof(shared_rxbf));
+                // Copio a shared_rxbf
+                strcpy(shared_rxbf, rx_buffer);
+
+                // ========================================================
+                // ESCRITURA DE ARCHIVO RX
+                // Variables necesarias para manipular archivos
+                struct file *file;
+                loff_t pos = 0;
+                ssize_t bytes_written;
+
+                // Abrir archivo
+                file = filp_open(RX_FILE, O_RDWR | O_CREAT | O_APPEND, 0644);
+                if (IS_ERR(file)) {
+                    pr_err("serdev_recv - Error al abrir archivo\n");
+                    return PTR_ERR(file);
+                }
+                // Escribo en el archivo con kernel_write()
+                // file: puntero archivo
+                // rx_buffer: string
+                // strlen(rx_buffer) = tamaño en bytes
+                // pos: offset
+                bytes_written = kernel_write(file, rx_buffer, strlen(rx_buffer), &pos);
+                if (bytes_written < 0) {
+                    pr_err("serdev_recv - Error al escribir archivo\n");
+                    filp_close(file, NULL);
+                    // return bytes_written;
+                }
+                pr_info("serdev_recv - %zd bytes escritos en archivo %s\n", 
+                    bytes_written, RX_FILE);
+
+                // Cierro archivo
+                filp_close(file, NULL);
+                //==========================================================
+                // Limpio rx_buffer local
+                memset(rx_buffer, 0, sizeof(rx_buffer));
             }
         } else {
             pr_warn("serdev_recv - Buffer overflow!\n");
             rx_index = 0;
         }
     }
-    // return serdev_device_write_buf(serdev, buffer, size); // echo back
+    // Echo local de debug de serdev_recv
+    // return serdev_device_write_buf(serdev, rx_buffer, size);
     return size;
 }
 
@@ -86,6 +145,9 @@ static size_t uart_serdev_recv( struct serdev_device *serdev,
 static const struct serdev_device_ops uart_serdev_ops = {
 	.receive_buf = uart_serdev_recv,
 };
+
+// Puntero global al serdev
+struct serdev_device *g_serdev = NULL;
 
 ///////////////////////////////////////////////////////////
 // SERDEV - PROBE()
@@ -106,6 +168,9 @@ static int uart_serdev_probe(struct serdev_device *serdev)
         return -status;
     }
 
+    // Guardo puntero al serdev global
+    g_serdev = serdev;
+
     pr_info("uart_serdev - Configuring UART\n");
     // Configuramos la UART
     serdev_device_set_baudrate(serdev, UART_BAUDRATE);
@@ -113,7 +178,7 @@ static int uart_serdev_probe(struct serdev_device *serdev)
     serdev_device_set_parity(serdev, SERDEV_PARITY_NONE);
 
     // Envio comando de bienvenida
-    status = serdev_device_write_buf(serdev, "UART HABILITADA!", sizeof("UART HABILITADA!"));
+    status = serdev_device_write_buf(serdev, "UART HABILITADA!\n", sizeof("UART HABILITADA!\n"));
     pr_info("uart_serdev - UART configurado!\n");
 
     return 0;
@@ -133,14 +198,9 @@ static void uart_serdev_remove(struct serdev_device *serdev)
 //////////////////////////////////////////////////////////////////
 
 // VARIABLES DEL CHAR DEVICE
-static cdev egb_cdev;
+static struct cdev egb_cdev;
 static dev_t egb_cdev_number;
 static struct class *egb_class;
-
-// BUFFER DE RX
-static char shared_rxbf[UART_BUFFER_SIZE];
-// BUFFER DE TX
-static char shared_txbf[UART_BUFFER_SIZE];
 
 // PROTOTIPOS DEL CHAR DEVICE
 static ssize_t egb_uart_read(struct file *f, char __user *user_bf, size_t len, loff_t *offset);
@@ -163,21 +223,30 @@ static ssize_t egb_uart_read(   struct file *f,
 {
     int not_copied;
     int delta;
-    int to_copy = (len + *offset) < sizeof(shared_rxbf) ? len : (sizeof(shared_rxbf) - *offset);
+    int to_copy;
 
-    pr_info("uart_read - Leyendo %d bytes, offset = %lld\n",
-            to_copy, *offset);
-    
+    //pr_info("uart_read - Leyendo %d bytes, offset = %lld\n",
+    //        to_copy, *offset);
+
+    // Si el offset es mayor que el tamaño del buffer, no hay mas datos para leer
     if (*offset >= sizeof(shared_rxbf))
 		return 0;
-    
-    not_copied = copy_to_user(user_bf, &shared_rxbf[*offset], to_copy);
+
+    // Reviso cuanto se puede leer
+    // to_copy = min(size, sizeof(shared_rxbf) - *offset);
+    to_copy = (len) < (sizeof(shared_rxbf) - *offset) ? len : (sizeof(shared_rxbf) - *offset);
+    // Copio a userspace
+    not_copied = copy_to_user(user_bf, shared_rxbf + *offset, to_copy);
     delta = to_copy - not_copied;
+    pr_info("uart_read - Se copia a user el mensaje: %s", shared_rxbf);
 
     if (not_copied) 
 		pr_warn("uart_read - Solo se copiaron %d bytes\n", delta);
     
     *offset += delta;
+    // Limpio buffer de recepcion
+    memset(shared_rxbf, 0, sizeof(shared_rxbf));
+    // Devuelvo cantidad de bytes leidos
     return delta;
 }
 
@@ -206,6 +275,12 @@ static ssize_t egb_uart_write(  struct file *f,
 		pr_warn("uart_write - Solo se copiaron %d bytes\n", delta);
     
     *offset += delta;
+
+    // Copio delta bytes de shared_txbf a serdev
+    serdev_device_write_buf(g_serdev, shared_txbf, delta);
+    // Limpio buffer de escritura
+    memset(shared_txbf, 0, sizeof(shared_txbf));
+    // Retorno cantidad de bytes escritos
     return delta;
 }
 
@@ -250,7 +325,7 @@ static int __init egb_init(void) {
     egb_class = class_create(CLASS_NAME);
     // Si no se pudo crear la clase, borro cdev y libero memoria
     if(!egb_class){
-        pr_err("egb_init - No pudo crearse la clase egb_uart_class"\n);
+        pr_err("egb_init - No pudo crearse la clase egb_uart_class\n");
         status = ENOMEM;
         goto delete_cdev;
     }
@@ -263,7 +338,7 @@ static int __init egb_init(void) {
                             DEVICE_NAME);
     // Si no se pudo crear, borro class, cdev y libero memoria
     if(!status){
-        pr_error("egb_init - No se pudo crear device en /dev/%s\n", DEVICE_NAME);
+        pr_err("egb_init - No se pudo crear device en /dev/%s\n", DEVICE_NAME);
         status = ENOMEM;
         goto delete_class;
     }
@@ -273,7 +348,7 @@ static int __init egb_init(void) {
 
     // Creo el serdev
 	pr_info("egb_init - Creando uart_serdev_driver...\n");
-    status = serdev_device_driver_register(&uart_serdev_driver);
+    status = (int) serdev_device_driver_register(&uart_serdev_driver);
     // Si no se pudo registrar el serdev...
 	if(status < 0){
 		printk("egb_init - Error! No se pudo registrar el serdev\n");
@@ -320,4 +395,4 @@ module_exit(egb_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR(AUTHOR);
-MODULE_DESCRIPTION("Demo serdev (UART) en Raspberry Pi");
+MODULE_DESCRIPTION("Bridge serdev (UART) en Raspberry Pi");
