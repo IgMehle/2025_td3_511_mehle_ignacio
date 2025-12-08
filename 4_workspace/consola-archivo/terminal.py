@@ -1,13 +1,13 @@
 import os
 from datetime import datetime
 
-LOG_FILE = "log.txt"
-CMD_FILE = "cmd.txt"  # Archivo donde se guardan los comandos
+RX_FILE = "rx.txt"          # Archivo de lineas recibidas de UART
+CMD_FILE = "/dev/egb_uart"  # Char Device de escritura de UART
 
 def init_log_file():
     # Crea los archivos si no existen
-    if not os.path.exists(LOG_FILE):
-        open(LOG_FILE, "w").close()
+    if not os.path.exists(RX_FILE):
+        open(RX_FILE, "w").close()
     if not os.path.exists(CMD_FILE):
         open(CMD_FILE, "w").close()
 
@@ -48,7 +48,7 @@ def cmd_set_lux(args):
         print("Error: los argumentos deben ser numéricos.")
         return
 
-    with open(LOG_FILE, "r") as f:
+    with open(RX_FILE, "r") as f:
         lines = f.readlines()
     entry_number = len(lines) + 1
 
@@ -57,26 +57,26 @@ def cmd_set_lux(args):
     # Nuevo formato del log
     line = f"[{entry_number}] ({fecha}) Lux={lux} - High={up} - Low={down} - Ajuste={ajuste}\n"
 
-    with open(LOG_FILE, "a") as f:
+    with open(RX_FILE, "a") as f:
         f.write(line)
 
     print(f"[OK] Registro agregado: {line.strip()}")
 
 def cmd_get_lux():
-    with open(LOG_FILE, "r") as f:
+    with open(RX_FILE, "r") as f:
         lines = f.readlines()
     if not lines:
         print("No hay registros.")
         return
     last_line = lines[-1]
     try:
-        lux_str = last_line.split("Lux=")[1].split(" -")[0]
+        lux_str = last_line.split("Lux =")[1].split(" -")[0]
         print(f"Último valor de Lux: {lux_str}")
     except IndexError:
         print("Formato de línea inválido.")
 
 def cmd_get_log():
-    with open(LOG_FILE, "r") as f:
+    with open(RX_FILE, "r") as f:
         lines = f.readlines()
     if not lines:
         print("El archivo de log está vacío.")
@@ -86,7 +86,7 @@ def cmd_get_log():
         print(line.strip())
 
 def cmd_set_clear():
-    open(LOG_FILE, "w").close()
+    open(RX_FILE, "w").close()
     print("[OK] Archivo log borrado.")
 
 def cmd_set_rtc(args):
