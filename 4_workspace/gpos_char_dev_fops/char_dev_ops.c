@@ -69,6 +69,7 @@ static ssize_t chr_dev_write(struct file *f, const char __user *buff, size_t len
 	return copied;
 }
 
+/***************************************************************************************************** 
 static ssize_t chr_dev_write_file(struct file *file, const char __user *buf, size_t len, loff_t *off)
 {
     struct file *rx_file;
@@ -112,12 +113,13 @@ static ssize_t chr_dev_write_file(struct file *file, const char __user *buf, siz
 
     return len;
 }
+*******************************************************************************************************/
 
 // Operaciones de archivos
 static struct file_operations chrdev_ops = {
 	.owner = THIS_MODULE,
 	.read = chr_dev_read,
-	.write = chr_dev_write_file
+	.write = chr_dev_write
 };
 
 /**
@@ -154,7 +156,7 @@ static int __init chrdev_init(void) {
 		unregister_chrdev_region(chrdev_number, CHRDEV_COUNT);
 		printk(KERN_ERR "%s: No se pudo crear la clase del char device\n", AUTHOR);
 		return -1;
-	}git status
+	}
 
 	// Creo el archivo del char device
 	if(IS_ERR(device_create(chrdev_class, NULL, chrdev_number, NULL, AUTHOR))) {

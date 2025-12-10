@@ -28,8 +28,9 @@
 #define UART_BUFFER_SIZE  128
 #define UART_BAUDRATE   115200
 
-// Labels del archivo rx
+// Labels de archivos
 #define RX_FILE "/home/nacho/cli/rx.txt"
+#define LOG_FILE "/home/nacho/cli/log.txt"
 
 //=================================================================
 //  VARIABLES GLOBALES
@@ -77,6 +78,11 @@ static size_t uart_serdev_recv( struct serdev_device *serdev,
     // int status = 0;
     size_t i;
 
+    // Indica si hay que escribir en el archivo de recepcion o el de log
+    static char write_log = 0;
+    if(!strncmp(shared_txbf, "get log", 7)) write_log = 1;
+    else write_log = 0;
+
     for (i = 0; i < size; i++) {
         if (rx_index < UART_BUFFER_SIZE - 2) {
             // Leo caracter del buffer de uart
@@ -95,21 +101,35 @@ static size_t uart_serdev_recv( struct serdev_device *serdev,
                 rx_index = 0;
                 // Limpio shared_rxbf
                 memset(shared_rxbf, 0, sizeof(shared_rxbf));
-                // Copio a shared_rxbf
+                // Copio a shared_rxbf y aseguro terminacion
                 strcpy(shared_rxbf, rx_buffer);
+                shared_rxbf[UART_BUFFER_SIZE - 1] = '\0';
 
                 // ========================================================
-                // ESCRITURA DE ARCHIVO RX
+                // ESCRITURA DE ARCHIVO
                 // Variables necesarias para manipular archivos
                 struct file *file;
                 loff_t pos = 0;
                 ssize_t bytes_written;
 
-                // Abrir archivo
-                file = filp_open(RX_FILE, O_RDWR | O_CREAT | O_APPEND, 0644);
-                if (IS_ERR(file)) {
-                    pr_err("serdev_recv - Error al abrir archivo\n");
-                    return PTR_ERR(file);
+                if (write_log)
+                {
+                    // Abrir archivo log.txt en modo APPEND
+                    file = filp_open(LOG_FILE, O_RDWR | O_CREAT | O_APPEND, 0644);
+                    if (IS_ERR(file))
+                    {
+                        pr_err("serdev_recv - Error al abrir archivo log.txt\n");
+                        return PTR_ERR(file);
+                    }
+                }
+                else {
+                    // Abrir archivo rx.txt en modo WRITE
+                    file = filp_open(RX_FILE, O_RDWR | O_CREAT, 0644);
+                    if (IS_ERR(file))
+                    {
+                        pr_err("serdev_recv - Error al abrir archivo rx.txt\n");
+                        return PTR_ERR(file);
+                    }
                 }
                 // Escribo en el archivo con kernel_write()
                 // file: puntero archivo
@@ -117,17 +137,28 @@ static size_t uart_serdev_recv( struct serdev_device *serdev,
                 // strlen(rx_buffer) = tamaño en bytes
                 // pos: offset
                 bytes_written = kernel_write(file, rx_buffer, strlen(rx_buffer), &pos);
-                if (bytes_written < 0) {
+                if (bytes_written < 0)
+                {
                     pr_err("serdev_recv - Error al escribir archivo\n");
                     filp_close(file, NULL);
                     // return bytes_written;
                 }
-                pr_info("serdev_recv - %zd bytes escritos en archivo %s\n", 
-                    bytes_written, RX_FILE);
+
+                // Mensaje de escritura
+                if(write_log)
+                {
+                    pr_info("serdev_recv - %zd bytes escritos en archivo %s\n",
+                        bytes_written, LOG_FILE);
+                }
+                else {
+                    pr_info("serdev_recv - %zd bytes escritos en archivo %s\n",
+                        bytes_written, RX_FILE);
+                }
 
                 // Cierro archivo
                 filp_close(file, NULL);
                 //==========================================================
+
                 // Limpio rx_buffer local
                 memset(rx_buffer, 0, sizeof(rx_buffer));
             }
@@ -229,21 +260,22 @@ static ssize_t egb_uart_read(   struct file *f,
     //        to_copy, *offset);
 
     // Si el offset es mayor que el tamaño del buffer, no hay mas datos para leer
-    if (*offset >= sizeof(shared_rxbf))
-		return 0;
+    if (*offset >= sizeof(shared_rxbf)) return 0;
 
     // Reviso cuanto se puede leer
     // to_copy = min(size, sizeof(shared_rxbf) - *offset);
     to_copy = (len) < (sizeof(shared_rxbf) - *offset) ? len : (sizeof(shared_rxbf) - *offset);
     // Copio a userspace
-    not_copied = copy_to_user(user_bf, shared_rxbf + *offset, to_copy);
+    // not_copied = copy_to_user(user_bf, shared_rxbf + *offset, to_copy);
+    not_copied = copy_to_user(user_bf, shared_rxbf, to_copy);
+    // Calculo cuántos bytes se copiaron
     delta = to_copy - not_copied;
     pr_info("uart_read - Se copia a user el mensaje: %s", shared_rxbf);
 
     if (not_copied) 
 		pr_warn("uart_read - Solo se copiaron %d bytes\n", delta);
     
-    *offset += delta;
+    *offset += to_copy;
     // Limpio buffer de recepcion
     memset(shared_rxbf, 0, sizeof(shared_rxbf));
     // Devuelvo cantidad de bytes leidos
@@ -262,24 +294,34 @@ static ssize_t egb_uart_write(  struct file *f,
     int delta;
     int to_copy = (len + *offset) < sizeof(shared_rxbf) ? len : (sizeof(shared_rxbf) - *offset);
 
-    pr_info("uart_write - Escribiendo %d bytes, offset = %lld\n",
-            to_copy, *offset);
-    
-    if (*offset >= sizeof(shared_txbf))
-		return 0;
-    
-    not_copied = copy_from_user(&shared_txbf[*offset], user_bf, to_copy);
-    delta = to_copy - not_copied;
-
-    if (not_copied) 
-		pr_warn("uart_write - Solo se copiaron %d bytes\n", delta);
-    
-    *offset += delta;
-
-    // Copio delta bytes de shared_txbf a serdev
-    serdev_device_write_buf(g_serdev, shared_txbf, delta);
     // Limpio buffer de escritura
     memset(shared_txbf, 0, sizeof(shared_txbf));
+    // Mensaje de kernel
+    pr_info("uart_write - Escribiendo %d bytes, offset = %lld\n",
+            to_copy, *offset);
+    // Reviso si lo que se escribio excede al buffer
+    if (*offset >= sizeof(shared_txbf))
+		return 0;
+    // Copio lo escrito al buffer y guardo la cantidad de bytes que no se copiaron
+    // not_copied = copy_from_user(&shared_txbf[*offset], user_bf, to_copy);
+    not_copied = copy_from_user(shared_txbf, user_bf, to_copy);
+    // Calculo cuantos bytes se copiaron
+    delta = to_copy - not_copied;
+    if (not_copied) 
+		pr_warn("uart_write - Solo se copiaron %d bytes\n", delta);
+    // Actualizo offset (no lo uso aca)
+    *offset += delta;
+
+    // Limpio los espacios despues del enter
+	for(int i = 0; i < delta; i++) {
+		if(shared_txbf[i] == '\n') {
+			shared_txbf[i+1] = 0;
+			break;
+		}
+	}
+    // Copio delta bytes de shared_txbf a serdev
+    serdev_device_write_buf(g_serdev, shared_txbf, delta);
+
     // Retorno cantidad de bytes escritos
     return delta;
 }

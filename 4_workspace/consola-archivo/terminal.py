@@ -1,7 +1,9 @@
 import os
 from datetime import datetime
 
-RX_FILE = "rx.txt"          # Archivo de lineas recibidas de UART
+RX_FILE = "rx.txt"          # Archivo de lineas recibidas por UART
+# RX_FILE = "/dev/egb_uart"   # Archivo de lineas recibidas por UART
+LOG_FILE = "log.txt"        # Archivo de logs recibidos por UART
 CMD_FILE = "/dev/egb_uart"  # Char Device de escritura de UART
 
 def init_log_file():
