@@ -95,6 +95,11 @@ static size_t uart_serdev_recv( struct serdev_device *serdev,
     static char rx_buffer[UART_BUFFER_SIZE];
     static size_t rx_index = 0;
 
+    // Variables necesarias para manipular archivos
+    struct file *file;
+    loff_t pos = 0;
+    ssize_t bytes_written;
+
     // int status = 0;
     size_t i;
 
@@ -105,6 +110,14 @@ static size_t uart_serdev_recv( struct serdev_device *serdev,
         log_mode = 1;
         // Reinicio timer de log
         mod_timer(&log_timer, jiffies + msecs_to_jiffies(LOG_TIMEOUT_MS));
+        // AGREGO - Limpiar archivo log.txt
+        file = filp_open(LOG_FILE, O_RDWR | O_CREAT | O_TRUNC, 0644);
+        if (IS_ERR(file))
+        {
+            pr_err("serdev_recv - Error al limpiar archivo log.txt\n");
+            return PTR_ERR(file);
+        }
+        filp_close(file, NULL);
         pr_info("serdev_recv - Modo log de settings\n");
     }
 
@@ -132,11 +145,6 @@ static size_t uart_serdev_recv( struct serdev_device *serdev,
 
                 // ========================================================
                 // ESCRITURA DE ARCHIVO
-                // Variables necesarias para manipular archivos
-                struct file *file;
-                loff_t pos = 0;
-                ssize_t bytes_written;
-
                 if (log_mode)
                 {
                     // Abrir archivo log.txt en modo APPEND
@@ -149,7 +157,7 @@ static size_t uart_serdev_recv( struct serdev_device *serdev,
                 }
                 else {
                     // Abrir archivo rx.txt en modo WRITE
-                    file = filp_open(RX_FILE, O_RDWR | O_CREAT, 0644);
+                    file = filp_open(RX_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0644);
                     if (IS_ERR(file))
                     {
                         pr_err("serdev_recv - Error al abrir archivo rx.txt\n");

@@ -2,7 +2,7 @@ import os
 import time
 
 CMD_FILE = "/dev/egb_uart"   # Char device para enviar comandos UART
-RX_FILE  = "/dev/egb_uart"   # Archivo donde el driver escribe respuestas
+RX_FILE  = "rx.txt"   # Archivo donde el driver escribe respuestas
 LOG_FILE = "log.txt"         # Archivo donde el driver escribe el log (modo get log)
 
 # ---------------------------------------------------------
@@ -17,12 +17,11 @@ def wait_for_line(timeout=5):
         try:
             with open(RX_FILE, "r") as f:
                 lines = f.readlines()
-                if len(lines) > 0:
-                    return lines[-1].strip()
+                return lines[-1]
         except:
             pass
 
-        if (time.time() - start) > timeout:
+        if time.time() - start > timeout:
             return None
 
         time.sleep(0.1)
@@ -34,7 +33,7 @@ def wait_for_ack():
     print("Esperando ACK del dispositivo...")
     while True:
         try:
-            with open(RX_FILE, "r") as f:
+            with open(CMD_FILE, "r") as f:
                 lines = f.readlines()
                 for line in lines:
                     if "ACK" in line:
@@ -47,6 +46,8 @@ def wait_for_ack():
 # Inicializar archivos si no existen
 # ---------------------------------------------------------
 def init_files():
+    if not os.path.exists(RX_FILE):
+        open(RX_FILE, "w").close()
     if not os.path.exists(LOG_FILE):
         open(LOG_FILE, "w").close()
 
@@ -78,6 +79,9 @@ def main():
             # Envío literal del comando a la UART
             # =====================================================
             with open(CMD_FILE, "w") as f:
+                # LIMPIAR rx.txt ANTES de enviar comando
+                open(RX_FILE, "w").close()
+                # escribo comando
                 f.write(user_input + "\n")
 
             # =====================================================
