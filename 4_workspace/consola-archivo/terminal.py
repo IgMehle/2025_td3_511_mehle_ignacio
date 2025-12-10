@@ -1,119 +1,68 @@
 import os
-from datetime import datetime
+import time
 
-RX_FILE = "rx.txt"          # Archivo de lineas recibidas por UART
-# RX_FILE = "/dev/egb_uart"   # Archivo de lineas recibidas por UART
-LOG_FILE = "log.txt"        # Archivo de logs recibidos por UART
-CMD_FILE = "/dev/egb_uart"  # Char Device de escritura de UART
+CMD_FILE = "/dev/egb_uart"   # Char device para enviar comandos UART
+RX_FILE  = "/dev/egb_uart"   # Archivo donde el driver escribe respuestas
+LOG_FILE = "log.txt"         # Archivo donde el driver escribe el log (modo get log)
 
-def init_log_file():
-    # Crea los archivos si no existen
-    if not os.path.exists(RX_FILE):
-        open(RX_FILE, "w").close()
-    if not os.path.exists(CMD_FILE):
-        open(CMD_FILE, "w").close()
+# ---------------------------------------------------------
+# Espera una línea válida en RX_FILE con timeout
+# ---------------------------------------------------------
+def wait_for_line(timeout=5):
+    """Espera hasta que RX_FILE tenga una línea legible.
+       Devuelve la línea o None si hace timeout.
+    """
+    start = time.time()
+    while True:
+        try:
+            with open(RX_FILE, "r") as f:
+                lines = f.readlines()
+                if len(lines) > 0:
+                    return lines[-1].strip()
+        except:
+            pass
 
-def parse_args(args, expected_flags):
-    result = {}
-    i = 0
-    while i < len(args):
-        arg = args[i]
-        if arg.startswith("-") and arg in expected_flags:
-            if i + 1 < len(args):
-                value = args[i + 1]
-                result[arg] = value
-                i += 2
-            else:
-                print(f"Error: falta un valor para el argumento {arg}")
-                return None
-        else:
-            i += 1
-    for flag in expected_flags:
-        if flag not in result:
-            print(f"Error: falta el argumento {flag}")
+        if (time.time() - start) > timeout:
             return None
-    return result
 
-def cmd_set_lux(args):
-    expected_flags = ["-v", "-h", "-l", "-a"]
-    parsed = parse_args(args[1:], expected_flags)
-    if parsed is None:
-        print("Uso: set lux -v <valor> -h <up> -l <down> -a <ajuste>")
-        return
+        time.sleep(0.1)
 
-    try:
-        lux = int(parsed["-v"])
-        up = int(parsed["-h"])
-        down = int(parsed["-l"])
-        ajuste = "LENTA" if int(parsed["-a"]) > 0 else "RÁPIDA"
-    except ValueError:
-        print("Error: los argumentos deben ser numéricos.")
-        return
+# ---------------------------------------------------------
+# Espera que RX_FILE contenga "ACK" (sin timeout)
+# ---------------------------------------------------------
+def wait_for_ack():
+    print("Esperando ACK del dispositivo...")
+    while True:
+        try:
+            with open(RX_FILE, "r") as f:
+                lines = f.readlines()
+                for line in lines:
+                    if "ACK" in line:
+                        return True
+        except:
+            pass
+        time.sleep(0.1)
 
-    with open(RX_FILE, "r") as f:
-        lines = f.readlines()
-    entry_number = len(lines) + 1
+# ---------------------------------------------------------
+# Inicializar archivos si no existen
+# ---------------------------------------------------------
+def init_files():
+    if not os.path.exists(LOG_FILE):
+        open(LOG_FILE, "w").close()
 
-    fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    # Nuevo formato del log
-    line = f"[{entry_number}] ({fecha}) Lux={lux} - High={up} - Low={down} - Ajuste={ajuste}\n"
-
-    with open(RX_FILE, "a") as f:
-        f.write(line)
-
-    print(f"[OK] Registro agregado: {line.strip()}")
-
-def cmd_get_lux():
-    with open(RX_FILE, "r") as f:
-        lines = f.readlines()
-    if not lines:
-        print("No hay registros.")
-        return
-    last_line = lines[-1]
-    try:
-        lux_str = last_line.split("Lux =")[1].split(" -")[0]
-        print(f"Último valor de Lux: {lux_str}")
-    except IndexError:
-        print("Formato de línea inválido.")
-
-def cmd_get_log():
-    with open(RX_FILE, "r") as f:
-        lines = f.readlines()
-    if not lines:
-        print("El archivo de log está vacío.")
-        return
-    print("---- Contenido del log ----")
-    for line in lines:
-        print(line.strip())
-
-def cmd_set_clear():
-    open(RX_FILE, "w").close()
-    print("[OK] Archivo log borrado.")
-
-def cmd_set_rtc(args):
-    # Comando: set rtc day/month/year weekday hour:min:seg
-    if len(args) != 4:
-        print('Uso: set rtc <day/month/year> <weekday> <hour:min:seg>')
-        return
-
-    date_str = " ".join(args[1:])
-
-    with open("rtc.txt", "w") as f:
-        f.write(date_str + "\n")
-
-    print(f"RTC configurado a: {date_str}")
-
+# ---------------------------------------------------------
+# PROGRAMA PRINCIPAL
+# ---------------------------------------------------------
 def main():
-    init_log_file()
-    print("Aplicación de terminal iniciada.")
+    init_files()
+
+    print("Terminal UART Pico 2")
     print("Comandos disponibles:")
     print("  set lux -v INT -h INT -l INT -a INT")
     print("  get lux")
     print("  get log")
     print("  set rtc day/month/year weekday hour:min:seg")
-    print("  set clear")
-    print("  exit")
+    print("  exit\n")
 
     while True:
         try:
@@ -121,48 +70,38 @@ def main():
             if not user_input:
                 continue
 
-            # Guarda el comando en cmd.txt
-            with open(CMD_FILE, "a") as f:
-                if user_input != "exit":
-                    f.write(user_input + "\n")
-
-            parts = user_input.split()
-            command = parts[0].lower()
-            args = parts[1:]
-
-            if command == "set":
-                if not args:
-                    print("Uso: set <lux|rtc|clear> ...")
-                    continue
-                subcmd = args[0].lower()
-                if subcmd == "lux":
-                    cmd_set_lux(args)
-                elif subcmd == "rtc":
-                    cmd_set_rtc(args)
-                elif subcmd == "clear":
-                    cmd_set_clear()
-                else:
-                    print(f"Comando set desconocido: {subcmd}")
-
-            elif command == "get":
-                if not args:
-                    print("Uso: get <lux|log>")
-                    continue
-                subcmd = args[0].lower()
-                if subcmd == "lux":
-                    cmd_get_lux()
-                elif subcmd == "log":
-                    cmd_get_log()
-                else:
-                    print(f"Comando get desconocido: {subcmd}")
-
-            elif command == "exit":
+            if user_input == "exit":
                 print("Saliendo...")
                 break
 
+            # =====================================================
+            # Envío literal del comando a la UART
+            # =====================================================
+            with open(CMD_FILE, "w") as f:
+                f.write(user_input + "\n")
+
+            # =====================================================
+            # Modo especial GET LOG → esperar ACK y leer log.txt
+            # =====================================================
+            if user_input.startswith("get log"):
+                wait_for_ack()
+                print("\nACK recibido. Imprimiendo LOG:\n")
+                try:
+                    with open(LOG_FILE, "r") as f:
+                        for line in f:
+                            print(line.strip())
+                except:
+                    print("Error leyendo LOG_FILE")
+                continue  # vuelve al prompt
+
+            # =====================================================
+            # Modo normal → esperar una línea del RX_FILE
+            # =====================================================
+            line = wait_for_line(timeout=5)
+            if line is None:
+                print("[Timeout] No se recibió respuesta.")
             else:
-                print(f"Comando desconocido: {command}")
-                print("Comandos disponibles: set, get, exit")
+                print(line)
 
         except KeyboardInterrupt:
             print("\nSaliendo...")
@@ -170,5 +109,6 @@ def main():
         except Exception as e:
             print(f"Error: {e}")
 
+# ---------------------------------------------------------
 if __name__ == "__main__":
     main()

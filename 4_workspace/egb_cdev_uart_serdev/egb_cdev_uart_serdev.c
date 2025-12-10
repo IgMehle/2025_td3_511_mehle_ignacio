@@ -13,6 +13,8 @@
 // Headers utilitarios
 #include <linux/string.h>
 #include <linux/file.h>
+#include <linux/timer.h>
+#include <linux/jiffies.h>
 
 // Labels deL modulo
 #define DRIVER_NAME "egb_uart_serdev"
@@ -39,6 +41,24 @@
 static char shared_rxbf[UART_BUFFER_SIZE];
 // BUFFER DE TX
 static char shared_txbf[UART_BUFFER_SIZE];
+
+// MODO LOG - TIMEOUT
+static struct timer_list log_timer;
+static int log_mode = 0;
+#define LOG_TIMEOUT_MS  500
+
+// LOG TIMEOUT HANDLER
+static void log_timeout_handler(struct timer_list *t)
+{
+    pr_info("log_timeout_handler - Log timeout alcanzado - enviando ACK\n");
+
+    // Desactivo modo log
+    log_mode = 0;
+
+    // Escribo el ACK en shared_rxbf
+    memset(shared_rxbf, 0, sizeof(shared_rxbf));
+    strcpy(shared_rxbf, "ACK\n");
+}
 
 ////////////////////////////////////////////////////////////////////
 //  UART-SERDEV DEFINICIONES
@@ -79,9 +99,14 @@ static size_t uart_serdev_recv( struct serdev_device *serdev,
     size_t i;
 
     // Indica si hay que escribir en el archivo de recepcion o el de log
-    static char write_log = 0;
-    if(!strncmp(shared_txbf, "get log", 7)) write_log = 1;
-    else write_log = 0;
+    
+    if(!strncmp(shared_txbf, "get log", 7) && !log_mode){
+        // MODO LOG ON
+        log_mode = 1;
+        // Reinicio timer de log
+        mod_timer(&log_timer, jiffies + msecs_to_jiffies(LOG_TIMEOUT_MS));
+        pr_info("serdev_recv - Modo log de settings\n");
+    }
 
     for (i = 0; i < size; i++) {
         if (rx_index < UART_BUFFER_SIZE - 2) {
@@ -112,7 +137,7 @@ static size_t uart_serdev_recv( struct serdev_device *serdev,
                 loff_t pos = 0;
                 ssize_t bytes_written;
 
-                if (write_log)
+                if (log_mode)
                 {
                     // Abrir archivo log.txt en modo APPEND
                     file = filp_open(LOG_FILE, O_RDWR | O_CREAT | O_APPEND, 0644);
@@ -145,10 +170,12 @@ static size_t uart_serdev_recv( struct serdev_device *serdev,
                 }
 
                 // Mensaje de escritura
-                if(write_log)
+                if(log_mode)
                 {
                     pr_info("serdev_recv - %zd bytes escritos en archivo %s\n",
                         bytes_written, LOG_FILE);
+                    // Actualizo timeout
+                    mod_timer(&log_timer, jiffies + msecs_to_jiffies(LOG_TIMEOUT_MS));
                 }
                 else {
                     pr_info("serdev_recv - %zd bytes escritos en archivo %s\n",
@@ -398,8 +425,10 @@ static int __init egb_init(void) {
         goto delete_device;
 	}
 
-    // INIT OK
     pr_info("egb_init - Driver egb_uart_serdev registrado con éxito!\n");
+    // INIT LOG MODE TIMEOUT HANDLER
+    timer_setup(&log_timer, log_timeout_handler, 0);
+    // INIT OK
     return 0;
 
     // MANEJO DE ERRORES ACUMULATIVO (gracias Johannes!)
@@ -421,6 +450,7 @@ static int __init egb_init(void) {
 static void __exit egb_exit(void) {
 	pr_info("egb_exit - Borrando serdev...\n");
 	serdev_device_driver_unregister(&uart_serdev_driver);
+    del_timer_sync(&log_timer);
     pr_info("egb_exit - Borrando device...\n");
     device_destroy(egb_class, egb_cdev_number);
     pr_info("egb_exit - Borrando class y cdev...\n");
