@@ -5,8 +5,7 @@ from PyQt5.QtCore import QTimer, QDateTime
 from ui_mainwindow import Ui_MainWindow
 from ssh_manager import SSHManager
 from datetime import datetime
-
-
+import time
 
 
 class GUIController:
@@ -19,7 +18,9 @@ class GUIController:
         #self.char_device = "/home/alelinux/char_device_sim.txt"
         self.char_device = "/dev/egb_uart"
         #self.recepcion = "/home/alelinux/recepcion.txt"
-        self.recepcion = "/home/nacho/egb/rx.txt"
+        #self.recepcion = "/home/nacho/egb/rx.txt"
+        self.recepcion = "/opt/egb/rx.txt"
+        self.log = "/opt/egb/log.txt"
 
         # Conección de señales para botones SSH
         self.ui.btn_connect.clicked.connect(self.connect_ssh)
@@ -40,8 +41,9 @@ class GUIController:
         self.timer_rtc.timeout.connect(self.actualizar_rtc)
 
 
-    #MANEJO DE SSH
-
+    ########################################################################
+    ### MANEJO DE SSH
+    ########################################################################
     def log_message(self, message):
         #Muestra mensajes en el QTextEdit
         self.ui.textEdit_log.append(message)
@@ -80,10 +82,53 @@ class GUIController:
         except Exception as e:
             self.show_error(f"Error al desconectar: {str(e)}")     #HASTA ACÁ ES MANEJO DE CONEXION SSH.
 
+    #################################################################
+    ### POLLINGS DE RECEPCION
+    #################################################################
+    
+    ### Polling de recepcion de datos + timeout ###
+    def wait_for_line(self, timeout=5):
+        """
+        Espera una nueva linea en /opt/egb/rx.txt
+        Devuelve la última linea o None si hay timeout
+        """
+        start = time.time()
+        #last_size = 0
+        while time.time() - start < timeout:
+            ok, out = self.ssh_manager.execute_command(f"cat {self.recepcion}")
+            if ok and out:
+                lines = out.strip().splitlines()
+                if lines:
+                    return lines[-1]
+            time.sleep(0.1)
+        return None
+    
+    ### Polling de recepcion de ACK (leer log) ###
+    def wait_for_ack(self):
+        """
+        Espera indefinidamente a que rx.txt contenga "ACK".
+        Sale solo si el usuario interrumpe (Ctrl+C).
+        """
+        print("Esperando ACK... (Ctrl+C para cancelar)")
 
+        try:
+            while True:
+                ok, out = self.ssh_manager.execute_command(f"cat {self.recepcion}")
+                if ok and out:
+                    for line in out.splitlines():
+                        if "ACK" in line:
+                            return True
+                time.sleep(0.1)
 
-    #Funcionalidades para los botones COMANDOS#
+        except KeyboardInterrupt:
+            print("Espera de ACK cancelada por el usuario")
+            return False
 
+    ##################################################################
+    ### Funcionalidades para los botones COMANDOS ###
+    ##################################################################
+
+    ### SET LUX ###
     def enviar_datos(self):
          
         #Confirmacion de conexion:
@@ -112,7 +157,10 @@ class GUIController:
         self.ui.textEdit_log.append(cmd)
 
         # Se escribe en Raspberry:  
-        open(self.recepcion, "w").close()   #ESTO ES LIMPIAR BUFFER DE RECEPCION
+        # open(self.recepcion, "w").close()   #ESTO ES LIMPIAR BUFFER DE RECEPCION
+        # Limpio pseudobuffer de recepcion rx.txt
+        self.ssh_manager.execute_command(f"> {self.recepcion}")
+        # Escribo comando
         self.ssh_manager.execute_command(f'echo "{cmd}" >> {self.char_device}')
         #self.ssh_manager.execute_command(f'echo "{cmd}" >> {self.recepcion}') 
         #self.ssh_manager.execute_command(f"echo '{cmd}' >> char_device_sim.txt")
@@ -120,12 +168,21 @@ class GUIController:
         #print("📡 Enviado a Raspberry OK")      #self.ui.textEdit_log.append("📡 Enviado a Raspberry OK")
         print("COMANDO SET LUX ENVIADO OK.")
 
+        # Espero recepcion del OK
+        line = self.wait_for_line(timeout=5)
+        if line is None:
+            self.ui.textEdit_log.append("[TIMEOUT] Sin respuesta")
+            return
+        self.ui.textEdit_log.append(line)
+
+    ### GET LUX ###
     def leer_datos(self):
         #Verificacion de estado de conexion
         if not self.ssh_manager.is_connected():
             print("⚠ No hay conexión SSH")     #self.ui.textEdit_log.append("⚠ No hay conexión SSH")
             return
 
+        """
         stdout, stderr = self.ssh_manager.execute_command(f'cat {self.recepcion}')
         #salida = self.ssh_manager.execute_command(f'cat {self.recepcion}')
         #salida = self.ssh_manager.execute_command(f"cat recepcion.txt")
@@ -140,18 +197,34 @@ class GUIController:
       
         lineas = stderr.strip().split("\n")
         ultima = lineas[-1].strip()
-        
-        if not ultima.startswith("set "):   #Se va a tener que cambiar despues porque hay más comandos
+        """
+        # Limpio pseudobuffer de recepcion rx.txt
+        self.ssh_manager.execute_command(f"> {self.recepcion}")
+        # Escribo comando
+        self.ssh_manager.execute_command(f'echo "get lux" >> {self.char_device}')
+
+        # Espero recepcion de la linea con los datos
+        line = self.wait_for_line(timeout=5)
+        if line is None:
+            self.ui.textEdit_log.append("[TIMEOUT] Sin respuesta")
+            return
+        self.ui.textEdit_log.append(line)
+
+        # Si no empieza con [NOW] recibi fruta
+        if not line.startswith("[NOW]"):   #Se va a tener que cambiar despues porque hay más comandos
             print("Comando inválido en recepción")      #self.ui.textEdit_log.append(f"❌ Comando inválido en recepción: {ultima}")
             return
-    
+        
+        # Parseo de datos
+        # "[NOW] Lux = valor - Max = max - Min = min - Curva = curva"
+        # REVISAR UNA FORMA MAS ROBUSTA
         try:
-            partes = ultima.split()
+            partes = line.split("= ")
 
-            valor = partes[partes.index("-v") + 1]
-            valor_max = partes[partes.index("-h") + 1]
-            valor_min = partes[partes.index("-l") + 1]
-            curva = partes[partes.index("-a") + 1]
+            valor = partes[1].split(" -")[0]
+            valor_max = partes[2].split(" -")[0]
+            valor_min = partes[3].split(" -")[0]
+            curva = partes[4].split(" -")[0]
 
             self.ui.lineEdit_4.setText(valor)
             self.ui.lineEdit_5.setText(valor_max)
@@ -176,56 +249,9 @@ class GUIController:
             print("Error ṕrocesando comando:", {e})
             #self.ui.textEdit_log.append(f"❌ Error procesando comando: {e}")
 
-       
-
-
-
-    def enviar_log(self):
-        contenido = self.ui.textEdit_log.toPlainText().strip().split("\n")
-
-        for linea in contenido:
-            if linea.strip():
-                self.ssh_manager.execute_command(f'echo "{linea}" >> {self.char_device}')
-                self.ssh_manager.execute_command(f'echo "{linea}" >> {self.recepcion}')
-
-                #self.ssh_manager.execute_command(f"echo '{linea}' >> char_device_sim.txt")
-
-        print("Log enviado a char_device_sim.txt OK")
-        #self.ui.textEdit_log.append("✔ Log enviado a char_device_sim.txt")
-
-
-    """
-    def enviar_log(self):
-        if not self.ssh_manager or not self.ssh_manager.is_connected():
-            QMessageBox.warning(self.main_window, "Error", "No hay conexión SSH activa.")
-            return
-
-        try:
-            valor_actual = self.ui.lineEdit.text()
-            valor_max    = self.ui.lineEdit_2.text()
-            valor_min    = self.ui.lineEdit_3.text()
-
-            curva = 1 if self.ui.checkBox.isChecked() else 0
-
-            comando = f"set -v {valor_actual} -h {valor_max} -l {valor_min} -a {curva}"     #Se arma el comando.
-            comando_log = f"SET LOG"
-
-            # Escribir el comando en el archivo remoto (char_device_sim)
-            ok, salida = self.ssh_manager.execute_command(f"echo '{comando}' >> char_device_sim.txt") # > trunca, >> append 
-
-            # Copiar también en el archivo de recepción
-            if ok:
-                self.ssh_manager.execute_command(f"echo '{comando}' >> recepcion.txt")
-                self.ui.textEdit_log.append(f">> {comando_log}")
-                self.ui.textEdit_logMemmoria.append(f"Escrito: {comando}")
-            else:
-                QMessageBox.warning(self.main_window, "Error SSH", salida)
-
-        except Exception as e:
-            QMessageBox.critical(self.main_window, "Error", str(e))
-    """
-
+    ### GET LOG ###
     def leer_log(self):
+        """
         stdout, stderr = self.ssh_manager.execute_command(f'cat {self.recepcion}')      #stdout es un tuple: (True/False , "output"), stderr es el texto de salida y setPlainText() solo acepta string.
 
         if not stdout:
@@ -238,34 +264,43 @@ class GUIController:
 
         #salida = self.ssh_manager.execute_command(f"cat recepcion.txt")
         #self.ui.textEdit_logMemmoria.setPlainText(salida)
-        
+        """
+        # Limpio pseudobuffer de recepcion rx.txt
+        self.ssh_manager.execute_command(f"> {self.recepcion}")
+        # Escribo comando
+        self.ssh_manager.execute_command(f'echo "get log" >> {self.char_device}')
 
-    """
-    def leer_log(self):
-        #Lee el archivo receiver.txt y lo muestra.
-        if not self.ssh_manager or not self.ssh_manager.is_connected():
-            QMessageBox.warning(self.main_window, "Error", "No hay conexión SSH activa.")
+        # Espero el ACK     
+        if not self.wait_for_ack(timeout=5):
+            self.ui.textEdit_log.append("[TIMEOUT] No llegó ACK")
             return
         
-        ok, salida = self.ssh_manager.execute_command("cat recepcion.txt")
+        # Si llega el ACK 
+        ok, log = self.ssh_manager.execute_command(f"cat {self.log}")
         if ok:
-            self.ui.textEdit_log.append(">> GET LOG")
-            self.ui.textEdit_logMemmoria.setPlainText(salida)
-        else:
-            QMessageBox.warning(self.main_window, "Error", salida)
-     """  
+            self.ui.textEdit_logMemmoria.setPlainText(log)  
 
+    ### SET ECLEAR ###
     def limpiar_memoria(self):
         #Borra elcontenido de char_device_sim.txt.
         if not self.ssh_manager or not self.ssh_manager.is_connected():
             QMessageBox.warning(self.main_window, "Error", "No hay conexión SSH activa.")
             return
-        
-        cmd_clear = f"set eclear"
-        open(self.recepcion, "w").close()
-        self.ssh_manager.execute_command(f'echo "{cmd_clear}" >> {self.char_device}')
- 
 
+        #open(self.recepcion, "w").close()
+        # Limpio pseudobuffer de recepcion rx.txt
+        self.ssh_manager.execute_command(f"> {self.recepcion}")
+        # Escribo comando
+        self.ssh_manager.execute_command(f'echo "set eclear" >> {self.char_device}')
+ 
+        # Espero recepcion del OK
+        line = self.wait_for_line(timeout=5)
+        if line is None:
+            self.ui.textEdit_log.append("[TIMEOUT] Sin respuesta")
+            return
+        self.ui.textEdit_log.append(line)
+
+    ### SET RTC ###
     def setear_rtc(self):
         """
         #Simula comando set rtc y actualiza el DateTimeEdit.
@@ -305,23 +340,90 @@ class GUIController:
         print(cmd_rtc)                                                          #Se imprime el comando en consola.
         
         try:
-            open(self.recepcion, "w").close()
+            # open(self.recepcion, "w").close()
+            # Limpio pseudobuffer de recepcion rx.txt
+            self.ssh_manager.execute_command(f"> {self.recepcion}")
+            # Escribo fecha y hora al RTC
             self.ssh_manager.execute_command(f'echo "{cmd_rtc}" >> {self.char_device}')
             print("COMANDO RTC ENVIADO OK.")        
         except Exception as e:
-            print("Error ṕrocesando comando:", {e})
+            print("Error procesando comando:", {e})
 
-
-    
+        # Espero recepcion del OK
+        line = self.wait_for_line(timeout=5)
+        if line is None:
+            self.ui.textEdit_log.append("[TIMEOUT] Sin respuesta")
+            return
+        self.ui.textEdit_log.append(line)
+ 
+    ### Actualizar RTC
     def actualizar_rtc(self):
         self.ui.dateTimeEdit.setDateTime(QDateTime.currentDateTime())
 
-
-
-    # BORRADO LOCAL DE LOS LOG 
+    ### BORRADO LOCAL DE LOS LOGS
     def borrar_log_eventos(self):
         self.ui.textEdit_log.clear()
 
     def borrar_log_memoria(self):
         self.ui.textEdit_logMemmoria.clear()
 
+    """
+    def enviar_log(self):
+        contenido = self.ui.textEdit_log.toPlainText().strip().split("\n")
+
+        for linea in contenido:
+            if linea.strip():
+                self.ssh_manager.execute_command(f'echo "{linea}" >> {self.char_device}')
+                self.ssh_manager.execute_command(f'echo "{linea}" >> {self.recepcion}')
+
+                #self.ssh_manager.execute_command(f"echo '{linea}' >> char_device_sim.txt")
+
+        print("Log enviado a char_device_sim.txt OK")
+        #self.ui.textEdit_log.append("✔ Log enviado a char_device_sim.txt")
+    """
+
+    """
+    def enviar_log(self):
+        if not self.ssh_manager or not self.ssh_manager.is_connected():
+            QMessageBox.warning(self.main_window, "Error", "No hay conexión SSH activa.")
+            return
+
+        try:
+            valor_actual = self.ui.lineEdit.text()
+            valor_max    = self.ui.lineEdit_2.text()
+            valor_min    = self.ui.lineEdit_3.text()
+
+            curva = 1 if self.ui.checkBox.isChecked() else 0
+
+            comando = f"set -v {valor_actual} -h {valor_max} -l {valor_min} -a {curva}"     #Se arma el comando.
+            comando_log = f"SET LOG"
+
+            # Escribir el comando en el archivo remoto (char_device_sim)
+            ok, salida = self.ssh_manager.execute_command(f"echo '{comando}' >> char_device_sim.txt") # > trunca, >> append 
+
+            # Copiar también en el archivo de recepción
+            if ok:
+                self.ssh_manager.execute_command(f"echo '{comando}' >> recepcion.txt")
+                self.ui.textEdit_log.append(f">> {comando_log}")
+                self.ui.textEdit_logMemmoria.append(f"Escrito: {comando}")
+            else:
+                QMessageBox.warning(self.main_window, "Error SSH", salida)
+
+        except Exception as e:
+            QMessageBox.critical(self.main_window, "Error", str(e))
+    """
+
+    """
+    def leer_log(self):
+        #Lee el archivo receiver.txt y lo muestra.
+        if not self.ssh_manager or not self.ssh_manager.is_connected():
+            QMessageBox.warning(self.main_window, "Error", "No hay conexión SSH activa.")
+            return
+        
+        ok, salida = self.ssh_manager.execute_command("cat recepcion.txt")
+        if ok:
+            self.ui.textEdit_log.append(">> GET LOG")
+            self.ui.textEdit_logMemmoria.setPlainText(salida)
+        else:
+            QMessageBox.warning(self.main_window, "Error", salida)
+     """
