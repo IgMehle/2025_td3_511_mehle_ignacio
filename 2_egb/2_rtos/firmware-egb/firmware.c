@@ -365,7 +365,7 @@ uint8_t uart_set_rtc(const char *args)
 void uart_get_lux(void)
 {
     char msg[UART_BUFFER_SIZE];
-    //static settings_t actual;
+    static settings_t actual;
     uint16_t lux_actual;
     // FOR DEBUG
     printf("[OK] Comando de lectura de lux recibido\n");
@@ -375,7 +375,15 @@ void uart_get_lux(void)
     * Vamos a trabajar con Overwrite y Peek para que ambas no se pisen
     */
     if(xQueuePeek(q_lux, &lux_actual, 0) == pdPASS){
-        snprintf(msg, UART_BUFFER_SIZE-1, "[NOW] Lux = %5d\n", lux_actual);
+        if(xQueuePeek(q_settings, &actual, 0) == pdFALSE){
+            // Si no puedo leer valores validos de settings mando 0
+            actual.user_max = 0;
+            actual.user_min = 0;
+            actual.curva = 0;
+        }
+        snprintf(msg, UART_BUFFER_SIZE-1, 
+            "[NOW] LUX %d MAX %d MIN %d CURVA %d\n",
+            lux_actual, actual.user_max, actual.user_min, actual.curva);
         // Encolo el mensaje a UART_TX
         xQueueSend(q_uart_tx, msg, 0);
     }
@@ -1602,15 +1610,15 @@ int main()
     bh1750_init(ONESHOT_LORES);
 
     // Inicializo DS3231
-    // rtc_t init;
-    // init.sec = 00;
-    // init.min = 10;
-    // init.hour = 20;
-    // init.weekday = 4;
-    // init.day = 11;
-    // init.month = 8;
-    // init.year = 25;
-    // rtc_load(init);
+    rtc_t init;
+    init.sec = 00;
+    init.min = 30;
+    init.hour = 20;
+    init.weekday = 2;
+    init.day = 16;
+    init.month = 12;
+    init.year = 25;
+    rtc_load(init);
 
     // Escribo EEPROM
     uint8_t data[32];

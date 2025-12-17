@@ -60,12 +60,19 @@ static void log_timeout_handler(struct timer_list *t)
     // Desactivo modo log
     log_mode = 0;
     
-    // Abrir archivo rx.txt en modo WRITE
-    file = filp_open(RX_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    // Escribo ACK en rx.txt
-    bytes_written = kernel_write(file, ack, strlen(ack), &pos);
-    // Cierro archivo
-    filp_close(file, NULL);
+    // // Abrir archivo rx.txt en modo WRITE
+    // file = filp_open(RX_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    // // Chequear que pueda abrir el archivo rx.txt
+    // if (IS_ERR(file)) {
+    //     pr_err("log_timeout_handler - No pude abrir RX_FILE (%ld)\n", PTR_ERR(file));
+    //     return;
+    // }
+    // // Escribo ACK en rx.txt
+    // bytes_written = kernel_write(file, ack, strlen(ack), &pos);
+    // if (bytes_written < 0)
+    //     pr_err("log_timeout_handler - kernel_write fallo (%zd)\n", bytes_written);
+    // // Cierro archivo
+    // filp_close(file, NULL);
 
     // Escribo el ACK en shared_rxbf (old)
     memset(shared_rxbf, 0, sizeof(shared_rxbf));

@@ -33,7 +33,7 @@ def wait_for_ack():
     print("Esperando ACK del dispositivo...")
     while True:
         try:
-            with open(RX_FILE, "r") as f:
+            with open(CMD_FILE, "r") as f:
                 lines = f.readlines()
                 for line in lines:
                     if "ACK" in line:
