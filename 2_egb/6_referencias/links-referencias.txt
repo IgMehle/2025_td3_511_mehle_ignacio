@@ -1,2 +1,22 @@
+- Encoder KY040
 https://eloctavobit.com/modulos-sensores/codificador-rotatorio-ky-040-rotary-encoder
+- Debounce circuits
 https://hackaday.com/2015/12/09/embed-with-elliot-debounce-your-noisy-buttons-part-i/
+- Primeros Pasos con Qt Designer y PyQt5:
+https://www.pythonguis.com/tutorials/first-steps-qtcreator/
+- Apuntes de Cátedra de Electrónica Industrial
+https://leifrautn.blogspot.com/search/label/Electr%C
+3%B3nica%20industrial%201
+- Kernel Module Read/Write Files:
+https://www.baeldung.com/linux/kernel-module-read-write-files
+- Let's Code a Linux Driver (Playlist) - Johannes 4GNU_Linux:
+https://www.youtube.com/playlist?list=PLCGpd0Do5-I3b5TtyqeF1UdyD4C-S-dMa
+- Linux Driver Tutorial
+https://github.com/Johannes4Linux/Linux_Driver_Tutorial
+- UART Communication: Raspberry Pi 4b (serdev API)
+https://www.youtube.com/watch?v=PVEUwR1BHyk
+https://github.com/decryptec/Raspi_serial_drivers/tree/main/uart
+- funciones de string
+https://www.ibm.com/docs/es/i/7.6.0?topic=functions-strtok-tokenize-string
+https://www.ibm.com/docs/es/i/7.6.0?topic=functions-strncmp-compare-strings
+https://www.ibm.com/docs/es/i/7.5.0?topic=functions-sscanf-read-data
